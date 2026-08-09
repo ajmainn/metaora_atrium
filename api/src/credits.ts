@@ -30,5 +30,5 @@ export function refundPercent(hoursNotice: number): number {
 }
 
 export function refundAmount(fee: number, percent: number): number {
-  return Math.round(fee * percent);
+  return Math.floor(fee * percent);
 }
