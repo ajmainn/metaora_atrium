@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../db';
 import { requireRole, requireSession } from '../auth';
-import { roomFee, seatFee } from '../credits';
 import { applyCoachCancellation } from '../sessionCancellation';
+import { createSessionBooking, SessionCreationError } from '../sessionCreation';
 
 const router = Router();
 
@@ -136,53 +136,38 @@ router.post('/', requireSession, requireRole('admin', 'coach'), async (req, res)
       return;
     }
 
-    const rooms = await query('select id, name, capacity from room where id = $1', [room_id]);
-    if (rooms.length === 0) {
-      res.status(400).json({ error: 'no such room' });
+    const roomId = Number(room_id);
+    const coachId = Number(coach_id);
+    if (!Number.isInteger(roomId) || !Number.isInteger(coachId)) {
+      res.status(400).json({ error: 'room_id and coach_id must be valid ids' });
       return;
     }
 
-    const coaches = await query("select id, credits from person where id = $1 and kind = 'coach' and active = true", [coach_id]);
-    if (coaches.length === 0) {
-      res.status(400).json({ error: 'no such coach' });
-      return;
-    }
-
-    const clashes = await query(
-      `select id, starts_at, ends_at
-         from session
-        where room_id = $1
-          and starts_at <= $3
-          and ends_at >= $2
-        limit 1`,
-      [room_id, starts_at, ends_at]
+    const created = await withTransaction(
+      (client) =>
+        createSessionBooking(client, {
+          room_id: roomId,
+          coach_id: coachId,
+          discipline,
+          session_type,
+          starts_at,
+          ends_at
+        }),
+      { isolationLevel: 'serializable' }
     );
-
-    if (clashes.length > 0) {
-      res.status(409).json({ error: `${rooms[0].name} is already booked for that time` });
-      return;
-    }
-
-    const fee = roomFee(session_type);
-    const seat = seatFee(session_type);
-
-    const created = await withTransaction(async (client) => {
-      const inserted = await client.query(
-        `insert into session
-           (room_id, coach_id, discipline, session_type, status, starts_at, ends_at,
-            room_fee_credits, seat_fee_credits)
-         values ($1, $2, $3, $4, 'scheduled', $5, $6, $7, $8)
-         returning *`,
-        [room_id, coach_id, discipline, session_type, starts_at, ends_at, fee, seat]
-      );
-
-      await client.query('update person set credits = credits - $1 where id = $2', [fee, coach_id]);
-
-      return inserted.rows[0];
-    });
 
     res.status(201).json(created);
   } catch (err) {
+    if (err instanceof SessionCreationError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '40001') {
+      res.status(409).json({ error: 'booking conflict, please retry' });
+      return;
+    }
+
     console.error(err);
     res.status(500).json({ error: 'could not create the session' });
   }

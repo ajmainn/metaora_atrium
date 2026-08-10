@@ -17,10 +17,20 @@ export async function query<T extends QueryResultRow = any>(
   return result.rows;
 }
 
-export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+type TransactionOptions = {
+  isolationLevel?: 'serializable';
+};
+
+export async function withTransaction<T>(
+  fn: (client: PoolClient) => Promise<T>,
+  options: TransactionOptions = {}
+): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query('begin');
+    if (options.isolationLevel) {
+      await client.query(`set transaction isolation level ${options.isolationLevel}`);
+    }
     const result = await fn(client);
     await client.query('commit');
     return result;
