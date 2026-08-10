@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../db';
 import { requireRole, requireSession } from '../auth';
-import { hoursOfNotice, refundAmount, refundPercent, roomFee, seatFee } from '../credits';
+import { roomFee, seatFee } from '../credits';
+import { applyCoachCancellation } from '../sessionCancellation';
 
 const router = Router();
 
@@ -270,51 +271,14 @@ router.post('/:id/cancel', requireSession, requireRole('admin', 'coach'), async 
       return;
     }
 
-    const percent = refundPercent(hoursOfNotice(new Date(), new Date(session.starts_at)));
-    const roomRefund = refundAmount(Number(session.room_fee_credits), percent);
-
-    const summary = await withTransaction(async (client) => {
-      const enrolments = await client.query(
-        "select id, person_id, credits_charged from enrolment where session_id = $1 and status = 'active'",
-        [id]
-      );
-
-      let seatsRefunded = 0;
-
-      for (const enrolment of enrolments.rows) {
-        const refund = refundAmount(Number(enrolment.credits_charged), percent);
-
-        await client.query(
-          `update enrolment
-              set status = 'cancelled', credits_refunded = $1, cancelled_at = now()
-            where id = $2`,
-          [refund, enrolment.id]
-        );
-
-        await client.query('update person set credits = credits + $1 where id = $2', [
-          refund,
-          enrolment.person_id
-        ]);
-
-        seatsRefunded += refund;
-      }
-
-      await client.query('update person set credits = credits + $1 where id = $2', [
-        roomRefund,
-        session.coach_id
-      ]);
-
-      await client.query("update session set status = 'cancelled' where id = $1", [id]);
-
-      return { enrolments: enrolments.rowCount, seatsRefunded };
-    });
+    const summary = await withTransaction((client) => applyCoachCancellation(client, session));
 
     res.json({
       id,
       status: 'cancelled',
-      refund_percent: percent,
-      room_fee_refunded: roomRefund,
-      enrolments_cancelled: summary.enrolments,
+      refund_percent: summary.refundPercent,
+      room_fee_refunded: summary.roomRefund,
+      enrolments_cancelled: summary.enrolmentsCancelled,
       seat_fees_refunded: summary.seatsRefunded
     });
   } catch (err) {
