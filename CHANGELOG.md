@@ -112,6 +112,34 @@ Why:
 - The previous flow checked only basic room/coach existence and used closed overlap bounds.
 - Credit deduction must be part of the same concurrency-safe transaction as validation and session insertion.
 
+## Participant Session Booking
+
+- Added `api/src/sessionEnrolment.ts`
+  - Centralized participant/coach-as-participant booking logic.
+  - Allows participants to book sessions.
+  - Allows coaches to attend another coach's session as a participant.
+  - Rejects coach self-enrolment.
+  - Allows booking only scheduled sessions.
+  - Rejects duplicate active enrolments for the same person and session.
+  - Enforces participant capacity using active enrolments only; the coach is excluded.
+  - Rejects overlapping commitments from teaching or active enrolments using half-open interval logic.
+  - Ignores cancelled sessions and cancelled enrolments for conflict checks.
+  - Charges the session's existing participant fee, writes integer credit fields, and creates active enrolments with zero refund.
+  - Locks the session and person rows, validates credits, and uses guarded deduction to prevent negative balances.
+
+- Updated `api/src/routes/sessions.ts`
+  - Added authenticated `POST /api/sessions/:id/book`.
+  - Runs the whole enrolment operation in a serializable transaction.
+  - Returns only the caller's enrolment record, avoiding other participant data.
+
+- Added `api/test/sessionEnrolment.test.ts`
+  - Covers successful participant booking, coach attending another coach's session, self-enrolment rejection, duplicate rejection, capacity rejection, teaching overlap, enrolment overlap, half-open adjacency, insufficient credits, cancelled session rejection, and credit/enrolment fields.
+
+Why:
+- Participants and coaches need a transactional way to book seats in scheduled sessions.
+- The API must enforce capacity, duplicate, credit, and commitment rules rather than relying on UI behavior.
+- Session/person locking plus serializable isolation keeps capacity and balance updates concurrency-safe.
+
 ## Verification
 
 - Existing tests pass with `npm.cmd test`.

@@ -3,6 +3,7 @@ import { query, withTransaction } from '../db';
 import { requireRole, requireSession } from '../auth';
 import { applyCoachCancellation } from '../sessionCancellation';
 import { createSessionBooking, SessionCreationError } from '../sessionCreation';
+import { enrolInSession, SessionEnrolmentError } from '../sessionEnrolment';
 
 const router = Router();
 
@@ -227,6 +228,41 @@ router.patch('/:id', requireSession, requireRole('admin', 'coach'), async (req, 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'could not update the session' });
+  }
+});
+
+router.post('/:id/book', requireSession, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(404).json({ error: 'no such session' });
+      return;
+    }
+
+    const enrolment = await withTransaction(
+      (client) => enrolInSession(client, id, res.locals.personId),
+      { isolationLevel: 'serializable' }
+    );
+
+    res.status(201).json(enrolment);
+  } catch (err) {
+    if (err instanceof SessionEnrolmentError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '23505') {
+      res.status(409).json({ error: 'session is already booked by this person' });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '40001') {
+      res.status(409).json({ error: 'booking conflict, please retry' });
+      return;
+    }
+
+    console.error(err);
+    res.status(500).json({ error: 'could not book the session' });
   }
 });
 
