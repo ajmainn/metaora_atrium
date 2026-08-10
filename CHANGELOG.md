@@ -190,6 +190,34 @@ Why:
 - Role-specific dashboard data avoids leaking other participant information to the browser.
 - The UI stays intentionally simple and reuses the existing API/CSS patterns.
 
+## Role Calendar Views
+
+- Added `web/app/calendarTime.ts`
+  - Centralized small `America/New_York` date/time formatting helpers.
+  - Provides centre-local date keys and hours for calendar grouping without browser-local `getHours()`.
+
+- Updated `web/app/participant/page.tsx`
+  - Added a simple participant calendar section.
+  - Shows only the signed-in participant's active upcoming bookings.
+  - Displays session date, time, type, discipline, and room from already role-filtered dashboard data.
+
+- Updated `web/app/coach/page.tsx`
+  - Added a simple coach calendar section.
+  - Shows own scheduled sessions, sessions the coach is attending, and other coach sessions as Busy entries.
+  - Keeps other coaches' attendee and participant information out of the browser.
+
+- Updated `web/app/admin/sessions/page.tsx`
+  - Preserved the existing admin weekly grid.
+  - Changed week labels and slot placement to use centre-local New York date/hour helpers instead of browser-local date methods.
+
+- Updated `web/app/globals.css`
+  - Added responsive list-calendar styles shared by participant and coach dashboards.
+
+Why:
+- The assignment demo needs each role to have a readable calendar view.
+- Calendar placement must be based on centre-local time, not the user's browser timezone.
+- Reusing the existing role-filtered dashboard data keeps permission filtering server-side.
+
 ## Verification
 
 - Existing tests pass with `npm.cmd test`.

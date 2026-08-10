@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  addDaysToDateKey,
+  centreDateKey,
+  centreHour,
+  dateKeyToDate,
+  formatCentreDateKey,
+  startOfCentreWeekKey
+} from '../../calendarTime';
 
 type Room = { id: number; name: string; capacity: number };
 type Person = { id: number; full_name: string; email: string; kind: string };
@@ -22,16 +30,6 @@ type Me = { kind: string };
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
-const dayNames = [
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-  'Sunday'
-];
-
 const disciplines = [
   'fitness',
   'lifestyle',
@@ -47,16 +45,9 @@ const hours = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 
 const dayMilliseconds = 24 * 60 * 60 * 1000;
 
-function startOfWeek(date: Date) {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
-  return start;
-}
-
 export default function AdminSessions() {
   const router = useRouter();
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
+  const [weekStartKey, setWeekStartKey] = useState(() => startOfCentreWeekKey(new Date()));
   const [sessions, setSessions] = useState<Session[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
@@ -70,17 +61,16 @@ export default function AdminSessions() {
   const [roomId, setRoomId] = useState('');
   const [coachId, setCoachId] = useState('');
 
-  const days = [0, 1, 2, 3, 4, 5, 6].map(
-    (offset) => new Date(weekStart.getTime() + offset * dayMilliseconds)
-  );
+  const days = [0, 1, 2, 3, 4, 5, 6].map((offset) => addDaysToDateKey(weekStartKey, offset));
 
   function loadSessions() {
     if (!authorized) return;
 
-    const to = new Date(weekStart.getTime() + 7 * dayMilliseconds);
+    const from = new Date(dateKeyToDate(weekStartKey).getTime() - dayMilliseconds);
+    const to = new Date(dateKeyToDate(addDaysToDateKey(weekStartKey, 7)).getTime() + dayMilliseconds);
 
     fetch(
-      `${apiBaseUrl}/api/sessions?from=${weekStart.toISOString()}&to=${to.toISOString()}`,
+      `${apiBaseUrl}/api/sessions?from=${from.toISOString()}&to=${to.toISOString()}`,
       { credentials: 'include' }
     )
       .then((res) => res.json())
@@ -102,7 +92,7 @@ export default function AdminSessions() {
 
   useEffect(() => {
     loadSessions();
-  }, [weekStart, authorized]);
+  }, [weekStartKey, authorized]);
 
   useEffect(() => {
     if (!authorized) return;
@@ -116,15 +106,9 @@ export default function AdminSessions() {
       .then(setPeople);
   }, [authorized]);
 
-  function sessionsFor(day: Date, hour: number) {
+  function sessionsFor(day: string, hour: number) {
     return sessions.filter((session) => {
-      const starts = new Date(session.starts_at);
-      return (
-        starts.getFullYear() === day.getFullYear() &&
-        starts.getMonth() === day.getMonth() &&
-        starts.getDate() === day.getDate() &&
-        starts.getHours() === hour
-      );
+      return centreDateKey(session.starts_at) === day && centreHour(session.starts_at) === hour;
     });
   }
 
@@ -156,10 +140,10 @@ export default function AdminSessions() {
       <h1>Session calendar</h1>
 
       <p>
-        <button onClick={() => setWeekStart(new Date(weekStart.getTime() - 7 * dayMilliseconds))}>
+        <button onClick={() => setWeekStartKey(addDaysToDateKey(weekStartKey, -7))}>
           Previous week
         </button>{' '}
-        <button onClick={() => setWeekStart(new Date(weekStart.getTime() + 7 * dayMilliseconds))}>
+        <button onClick={() => setWeekStartKey(addDaysToDateKey(weekStartKey, 7))}>
           Next week
         </button>
       </p>
@@ -168,9 +152,9 @@ export default function AdminSessions() {
         <thead>
           <tr>
             <th className="hour"></th>
-            {days.map((day, index) => (
-              <th key={index}>
-                {dayNames[index]} {day.getDate()}/{day.getMonth() + 1}
+            {days.map((day) => (
+              <th key={day}>
+                {formatCentreDateKey(day)}
               </th>
             ))}
           </tr>
@@ -179,11 +163,11 @@ export default function AdminSessions() {
           {hours.map((hour) => (
             <tr key={hour}>
               <th className="hour">{hour}:00</th>
-              {days.map((day, index) => (
-                <td key={index}>
+              {days.map((day) => (
+                <td key={day}>
                   {sessionsFor(day, hour).map((session) => (
                     <div className="entry" key={session.id}>
-                      {session.discipline} — {session.room_name} ({session.enrolled_count}/
+                      {session.discipline} - {session.room_name} ({session.enrolled_count}/
                       {session.room_capacity})
                     </div>
                   ))}

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { centreDateKey, formatCentreDateKey, formatCentreRange } from '../calendarTime';
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
@@ -33,25 +34,19 @@ type PublicSession = {
 };
 type Dashboard = { upcoming_bookings: Booking[]; history: Booking[] };
 
-const centreTimeZone = 'America/New_York';
 const typeLabels: Record<string, string> = { short: 'Short', standard: 'Standard', intensive: 'Intensive' };
-
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: centreTimeZone,
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(new Date(value));
-}
-
-function formatRange(start: string, end: string) {
-  return `${formatDateTime(start)} - ${formatDateTime(end)}`;
-}
 
 function credits(value: string | number) {
   return `${Number(value).toFixed(0)} credits`;
+}
+
+function groupBookingsByDate(bookings: Booking[]) {
+  return bookings.reduce<Record<string, Booking[]>>((groups, booking) => {
+    const key = centreDateKey(booking.starts_at);
+    groups[key] = groups[key] || [];
+    groups[key].push(booking);
+    return groups;
+  }, {});
 }
 
 export default function ParticipantDashboard() {
@@ -125,6 +120,9 @@ export default function ParticipantDashboard() {
   const availableSessions = sessions.filter(
     (session) => session.places_remaining > 0 && !bookedSessionIds.has(session.id)
   );
+  const calendarDays = Object.entries(groupBookingsByDate(dashboard.upcoming_bookings)).sort(
+    ([left], [right]) => left.localeCompare(right)
+  );
 
   return (
     <main className="dashboard-page">
@@ -139,6 +137,27 @@ export default function ParticipantDashboard() {
       {error ? <p className="state error">{error}</p> : null}
 
       <section className="panel">
+        <h2>My calendar</h2>
+        {calendarDays.length === 0 ? <p className="state">No active bookings on your calendar.</p> : (
+          <div className="calendar-list">
+            {calendarDays.map(([day, bookings]) => (
+              <article className="calendar-day" key={day}>
+                <h3>{formatCentreDateKey(day)}</h3>
+                {bookings.map((booking) => (
+                  <div className="calendar-item" key={booking.enrolment_id}>
+                    <strong>{booking.discipline}</strong>
+                    <span>{typeLabels[booking.session_type] || booking.session_type}</span>
+                    <span>{formatCentreRange(booking.starts_at, booking.ends_at)}</span>
+                    <span>{booking.room_name}</span>
+                  </div>
+                ))}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
         <h2>Upcoming bookings</h2>
         {dashboard.upcoming_bookings.length === 0 ? <p className="state">No upcoming bookings.</p> : (
           <div className="table-wrap">
@@ -148,7 +167,7 @@ export default function ParticipantDashboard() {
                 {dashboard.upcoming_bookings.map((booking) => (
                   <tr key={booking.enrolment_id}>
                     <td>{booking.discipline} ({typeLabels[booking.session_type] || booking.session_type})</td>
-                    <td>{formatRange(booking.starts_at, booking.ends_at)}</td>
+                    <td>{formatCentreRange(booking.starts_at, booking.ends_at)}</td>
                     <td>{booking.room_name}</td>
                     <td>{credits(booking.credits_charged)}</td>
                     <td>
@@ -177,7 +196,7 @@ export default function ParticipantDashboard() {
                 {availableSessions.map((session) => (
                   <tr key={session.id}>
                     <td>{session.discipline} ({typeLabels[session.session_type] || session.session_type})</td>
-                    <td>{formatRange(session.starts_at, session.ends_at)}</td>
+                    <td>{formatCentreRange(session.starts_at, session.ends_at)}</td>
                     <td>{session.room_name}</td>
                     <td>{credits(session.seat_fee_credits)}</td>
                     <td>{session.places_remaining} of {session.room_capacity}</td>
@@ -204,7 +223,7 @@ export default function ParticipantDashboard() {
                 {dashboard.history.map((booking) => (
                   <tr key={booking.enrolment_id}>
                     <td>{booking.discipline}</td>
-                    <td>{formatRange(booking.starts_at, booking.ends_at)}</td>
+                    <td>{formatCentreRange(booking.starts_at, booking.ends_at)}</td>
                     <td>{booking.enrolment_status} / {booking.status}</td>
                     <td>{credits(booking.credits_charged)}</td>
                     <td>{credits(booking.credits_refunded)}</td>

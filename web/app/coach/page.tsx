@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { centreDateKey, formatCentreDateKey, formatCentreRange } from '../calendarTime';
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
@@ -45,25 +46,64 @@ type BusySession = {
 };
 type Dashboard = { own_sessions: OwnSession[]; attending: AttendingSession[]; busy: BusySession[] };
 
-const centreTimeZone = 'America/New_York';
 const typeLabels: Record<string, string> = { short: 'Short', standard: 'Standard', intensive: 'Intensive' };
-
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: centreTimeZone,
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(new Date(value));
-}
-
-function formatRange(start: string, end: string) {
-  return `${formatDateTime(start)} - ${formatDateTime(end)}`;
-}
 
 function credits(value: string | number) {
   return `${Number(value).toFixed(0)} credits`;
+}
+
+type CalendarItem = {
+  key: string;
+  day: string;
+  title: string;
+  label: string;
+  starts_at: string;
+  ends_at: string;
+  detail: string;
+};
+
+function coachCalendarItems(dashboard: Dashboard) {
+  const items: CalendarItem[] = [
+    ...dashboard.own_sessions
+      .filter((session) => session.status === 'scheduled')
+      .map((session) => ({
+        key: `own-${session.id}`,
+        day: centreDateKey(session.starts_at),
+        title: session.discipline,
+        label: 'Teaching',
+        starts_at: session.starts_at,
+        ends_at: session.ends_at,
+        detail: `${typeLabels[session.session_type] || session.session_type} - ${session.room_name}`
+      })),
+    ...dashboard.attending.map((session) => ({
+      key: `attending-${session.enrolment_id}`,
+      day: centreDateKey(session.starts_at),
+      title: session.discipline,
+      label: 'Attending',
+      starts_at: session.starts_at,
+      ends_at: session.ends_at,
+      detail: `${typeLabels[session.session_type] || session.session_type} - ${session.room_name}`
+    })),
+    ...dashboard.busy.map((session) => ({
+      key: `busy-${session.id}`,
+      day: centreDateKey(session.starts_at),
+      title: 'Busy',
+      label: 'Other coach',
+      starts_at: session.starts_at,
+      ends_at: session.ends_at,
+      detail: typeLabels[session.session_type] || session.session_type
+    }))
+  ];
+
+  return items.sort((left, right) => left.starts_at.localeCompare(right.starts_at));
+}
+
+function groupCalendarItems(items: CalendarItem[]) {
+  return items.reduce<Record<string, CalendarItem[]>>((groups, item) => {
+    groups[item.day] = groups[item.day] || [];
+    groups[item.day].push(item);
+    return groups;
+  }, {});
 }
 
 export default function CoachDashboard() {
@@ -127,6 +167,9 @@ export default function CoachDashboard() {
   }
 
   if (loading || !person || !dashboard) return <main><p className="state">Loading...</p></main>;
+  const calendarDays = Object.entries(groupCalendarItems(coachCalendarItems(dashboard))).sort(
+    ([left], [right]) => left.localeCompare(right)
+  );
 
   return (
     <main className="dashboard-page">
@@ -141,6 +184,27 @@ export default function CoachDashboard() {
       {error ? <p className="state error">{error}</p> : null}
 
       <section className="panel">
+        <h2>Calendar</h2>
+        {calendarDays.length === 0 ? <p className="state">No active calendar entries.</p> : (
+          <div className="calendar-list">
+            {calendarDays.map(([day, items]) => (
+              <article className="calendar-day" key={day}>
+                <h3>{formatCentreDateKey(day)}</h3>
+                {items.map((item) => (
+                  <div className="calendar-item" key={item.key}>
+                    <strong>{item.title}</strong>
+                    <span>{item.label}</span>
+                    <span>{formatCentreRange(item.starts_at, item.ends_at)}</span>
+                    <span>{item.detail}</span>
+                  </div>
+                ))}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
         <h2>My upcoming sessions</h2>
         {dashboard.own_sessions.length === 0 ? <p className="state">No upcoming sessions.</p> : (
           <div className="session-list">
@@ -149,7 +213,7 @@ export default function CoachDashboard() {
                 <div className="session-card-head">
                   <div>
                     <h3>{session.discipline} ({typeLabels[session.session_type] || session.session_type})</h3>
-                    <p>{formatRange(session.starts_at, session.ends_at)} - {session.room_name}</p>
+                    <p>{formatCentreRange(session.starts_at, session.ends_at)} - {session.room_name}</p>
                     <p>{session.enrolled_count} attendee{session.enrolled_count === 1 ? '' : 's'}</p>
                   </div>
                   {session.status === 'scheduled' ? (
@@ -192,7 +256,7 @@ export default function CoachDashboard() {
                   <tr key={session.enrolment_id}>
                     <td>{session.discipline} ({typeLabels[session.session_type] || session.session_type})</td>
                     <td>{session.coach_name}</td>
-                    <td>{formatRange(session.starts_at, session.ends_at)}</td>
+                    <td>{formatCentreRange(session.starts_at, session.ends_at)}</td>
                     <td>{session.room_name}</td>
                     <td>{credits(session.credits_charged)}</td>
                   </tr>
@@ -214,7 +278,7 @@ export default function CoachDashboard() {
                   <tr key={session.id}>
                     <td>{session.discipline}</td>
                     <td>{typeLabels[session.session_type] || session.session_type}</td>
-                    <td>{formatRange(session.starts_at, session.ends_at)}</td>
+                    <td>{formatCentreRange(session.starts_at, session.ends_at)}</td>
                   </tr>
                 ))}
               </tbody>

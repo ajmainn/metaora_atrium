@@ -173,6 +173,33 @@ button:disabled {
   justify-content: space-between;
 }
 
+.calendar-list {
+  display: grid;
+  gap: 12px;
+}
+
+.calendar-day {
+  border: 1px solid #ddd;
+  padding: 12px;
+}
+
+.calendar-day h3 {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+
+.calendar-item {
+  border-top: 1px solid #eee;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1.1fr 0.8fr 1.4fr 1fr;
+  padding: 8px 0;
+}
+
+.calendar-item:first-of-type {
+  border-top: 0;
+}
+
 @media (max-width: 720px) {
   body {
     margin: 16px;
@@ -201,5 +228,9 @@ button:disabled {
   .session-card-head button {
     display: inline-block;
     margin-top: 8px;
+  }
+
+  .calendar-item {
+    grid-template-columns: 1fr;
   }
 }
