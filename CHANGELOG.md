@@ -218,6 +218,39 @@ Why:
 - Calendar placement must be based on centre-local time, not the user's browser timezone.
 - Reusing the existing role-filtered dashboard data keeps permission filtering server-side.
 
+## Email Notifications
+
+- Added Nodemailer to the API workspace.
+  - Uses SMTP settings from environment variables.
+  - Defaults are compatible with local Mailpit: `localhost:1025`.
+  - Added `SMTP_FROM=atrium@local.test` to `env.example` while keeping existing `MAIL_FROM` fallback support.
+
+- Added `api/src/mail.ts`
+  - Centralizes SMTP transport creation.
+  - Adds `sendMailSafely`, which logs mail failures without throwing into completed booking/cancellation flows.
+
+- Added `api/src/emailNotifications.ts`
+  - Sends administrator notification when a coach/admin creates a session.
+  - Sends coach notification when a participant or coach-as-participant books a place.
+  - Sends coach notification when an attendee cancels their own booking.
+  - Sends administrator notification when a coach cancels a session.
+  - Sends every affected active enrollee a cancellation/refund notice when the coach cancels, including coaches attending as participants.
+
+- Updated `api/src/routes/sessions.ts`
+  - Calls email notification functions only after the relevant transaction completes successfully.
+  - Keeps the main operation successful if email sending fails.
+
+- Updated `api/src/sessionCancellation.ts`
+  - Returns affected participant recipient/refund details from the transactional cancellation summary for post-commit emails.
+
+- Added `api/test/emailNotifications.test.ts`
+  - Covers participant booking, session creation, participant cancellation, coach cancellation notifications, and failure-tolerant mail sending.
+
+Why:
+- The assignment requires locally demonstrable event-driven email notifications.
+- Mailpit plus SMTP keeps the setup reproducible without hosted credentials.
+- Sending after commit prevents a failed email from rolling back successful credit/session/enrolment changes.
+
 ## Verification
 
 - Existing tests pass with `npm.cmd test`.

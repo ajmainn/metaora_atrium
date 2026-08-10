@@ -15,8 +15,20 @@ function fakeClient(calls: QueryCall[]) {
       if (text.includes('from enrolment')) {
         return {
           rows: [
-            { id: 11, person_id: 101, credits_charged: '15' },
-            { id: 12, person_id: 102, credits_charged: '60' }
+            {
+              id: 11,
+              person_id: 101,
+              credits_charged: '15',
+              full_name: 'Participant One',
+              email: 'one@atrium.local'
+            },
+            {
+              id: 12,
+              person_id: 102,
+              credits_charged: '60',
+              full_name: 'Coach Attendee',
+              email: 'coach.attendee@atrium.local'
+            }
           ],
           rowCount: 2
         };
@@ -52,7 +64,21 @@ for (const tier of tiers) {
       refundPercent: tier.percent,
       roomRefund: tier.roomRefund,
       enrolmentsCancelled: 2,
-      seatsRefunded: 75
+      seatsRefunded: 75,
+      affectedParticipants: [
+        {
+          personId: 101,
+          fullName: 'Participant One',
+          email: 'one@atrium.local',
+          refund: 15
+        },
+        {
+          personId: 102,
+          fullName: 'Coach Attendee',
+          email: 'coach.attendee@atrium.local',
+          refund: 60
+        }
+      ]
     });
 
     const enrolmentUpdates = calls.filter((call) => call.text.includes('update enrolment'));

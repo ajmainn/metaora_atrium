@@ -4,6 +4,12 @@ import { requireRole, requireSession } from '../auth';
 import { applyCoachCancellation } from '../sessionCancellation';
 import { createSessionBooking, SessionCreationError } from '../sessionCreation';
 import { cancelOwnEnrolment, enrolInSession, SessionEnrolmentError } from '../sessionEnrolment';
+import {
+  notifyCoachCancelledSession,
+  notifyParticipantBooked,
+  notifyParticipantCancelled,
+  notifySessionCreated
+} from '../emailNotifications';
 
 const router = Router();
 
@@ -16,6 +22,14 @@ const UPDATABLE_FIELDS = [
   'starts_at',
   'ends_at'
 ];
+
+async function notifyAfterSuccess(label: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`${label} notification failed`, err);
+  }
+}
 
 router.get('/', async (req, res) => {
   try {
@@ -257,6 +271,8 @@ router.post('/', requireSession, requireRole('admin', 'coach'), async (req, res)
       { isolationLevel: 'serializable' }
     );
 
+    await notifyAfterSuccess('session created', () => notifySessionCreated(created.id));
+
     res.status(201).json(created);
   } catch (err) {
     if (err instanceof SessionCreationError) {
@@ -344,6 +360,8 @@ router.post('/:id/book', requireSession, async (req, res) => {
       { isolationLevel: 'serializable' }
     );
 
+    await notifyAfterSuccess('participant booked', () => notifyParticipantBooked(enrolment.id));
+
     res.status(201).json(enrolment);
   } catch (err) {
     if (err instanceof SessionEnrolmentError) {
@@ -378,6 +396,10 @@ router.post('/:id/enrolments/:enrolmentId/cancel', requireSession, async (req, r
     const enrolment = await withTransaction(
       (client) => cancelOwnEnrolment(client, id, enrolmentId, res.locals.personId),
       { isolationLevel: 'serializable' }
+    );
+
+    await notifyAfterSuccess('participant cancelled', () =>
+      notifyParticipantCancelled(enrolment.id, enrolment.credits_refunded_now)
     );
 
     res.json(enrolment);
@@ -424,6 +446,10 @@ router.post('/:id/cancel', requireSession, requireRole('admin', 'coach'), async 
     }
 
     const summary = await withTransaction((client) => applyCoachCancellation(client, session));
+
+    await notifyAfterSuccess('coach cancelled session', () =>
+      notifyCoachCancelledSession(id, summary.affectedParticipants)
+    );
 
     res.json({
       id,

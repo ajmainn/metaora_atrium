@@ -1,5 +1,6 @@
 import { PoolClient } from 'pg';
 import { hoursOfNotice, refundAmount, refundPercent } from './credits';
+import type { AffectedParticipant } from './emailNotifications';
 
 type SessionForCancellation = {
   id: number;
@@ -12,6 +13,8 @@ type ActiveEnrolment = {
   id: number;
   person_id: number;
   credits_charged: string | number;
+  full_name: string;
+  email: string;
 };
 
 export type CoachCancellationSummary = {
@@ -19,6 +22,7 @@ export type CoachCancellationSummary = {
   roomRefund: number;
   enrolmentsCancelled: number;
   seatsRefunded: number;
+  affectedParticipants: AffectedParticipant[];
 };
 
 export async function applyCoachCancellation(
@@ -30,11 +34,15 @@ export async function applyCoachCancellation(
   const roomRefund = refundAmount(Number(session.room_fee_credits), percent);
 
   const enrolments = await client.query<ActiveEnrolment>(
-    "select id, person_id, credits_charged from enrolment where session_id = $1 and status = 'active'",
+    `select e.id, e.person_id, e.credits_charged, p.full_name, p.email
+       from enrolment e
+       join person p on p.id = e.person_id
+      where e.session_id = $1 and e.status = 'active'`,
     [session.id]
   );
 
   let seatsRefunded = 0;
+  const affectedParticipants: AffectedParticipant[] = [];
 
   for (const enrolment of enrolments.rows) {
     const refund = refundAmount(Number(enrolment.credits_charged), 1);
@@ -52,6 +60,12 @@ export async function applyCoachCancellation(
     ]);
 
     seatsRefunded += refund;
+    affectedParticipants.push({
+      personId: enrolment.person_id,
+      fullName: enrolment.full_name,
+      email: enrolment.email,
+      refund
+    });
   }
 
   await client.query('update person set credits = credits + $1 where id = $2', [
@@ -65,6 +79,7 @@ export async function applyCoachCancellation(
     refundPercent: percent,
     roomRefund,
     enrolmentsCancelled: enrolments.rowCount || enrolments.rows.length,
-    seatsRefunded
+    seatsRefunded,
+    affectedParticipants
   };
 }
