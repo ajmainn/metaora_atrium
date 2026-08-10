@@ -251,6 +251,30 @@ Why:
 - Mailpit plus SMTP keeps the setup reproducible without hosted credentials.
 - Sending after commit prevents a failed email from rolling back successful credit/session/enrolment changes.
 
+## Scheduled Daily Email Jobs
+
+- Added `node-cron` to the API workspace.
+
+- Added `api/src/scheduledEmails.ts`
+  - Provides callable `sendCoachDailySummaries`, `sendAdminDailyDigest`, and `runDailyEmailJobs` functions.
+  - Registers one daily cron job at `0 0 * * *` with timezone `America/New_York`.
+  - Builds each query window from New York local calendar midnights, including DST-short and DST-long days.
+  - Sends coach summaries only to coaches with at least one scheduled teaching session or active attendee booking that day.
+  - Sends administrator digest with daily sessions, active booking counts, and check-in counts.
+  - Reuses the existing safe mail sender so email failures are logged without crashing the job.
+
+- Updated `api/src/index.ts`
+  - Starts the daily email scheduler once when the API server starts.
+  - Respects `SCHEDULER_ENABLED=false` for local opt-out.
+
+- Added `api/test/scheduledEmails.test.ts`
+  - Covers coach summary send/no-send behavior, admin digest sending, and New York DST day-window calculation.
+
+Why:
+- The assignment requires daily emails at centre-local midnight, not at a fixed UTC hour.
+- Extracted job functions make the behavior easy to test and demonstrate without waiting for cron.
+- Keeping the implementation in one small module avoids adding queues or background infrastructure.
+
 ## Verification
 
 - Existing tests pass with `npm.cmd test`.

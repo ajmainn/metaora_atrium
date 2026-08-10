@@ -5,6 +5,7 @@ import { login, logout, me, requireSession } from './auth';
 import sessionRoutes from './routes/sessions';
 import roomRoutes from './routes/rooms';
 import peopleRoutes from './routes/people';
+import { startDailyEmailScheduler } from './scheduledEmails';
 
 const app = express();
 
@@ -29,4 +30,5 @@ const port = Number(process.env.API_PORT) || 4000;
 
 app.listen(port, () => {
   console.log(`api listening on http://localhost:${port}`);
+  startDailyEmailScheduler();
 });

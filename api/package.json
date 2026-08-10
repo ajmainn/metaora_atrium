@@ -7,14 +7,14 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test test/auth.test.ts test/credits.test.ts test/sessionCancellation.test.ts test/sessionCreation.test.ts test/sessionEnrolment.test.ts test/sessionEnrolmentCancellation.test.ts test/emailNotifications.test.ts"
+    "test": "node --import tsx --test test/auth.test.ts test/credits.test.ts test/sessionCancellation.test.ts test/sessionCreation.test.ts test/sessionEnrolment.test.ts test/sessionEnrolmentCancellation.test.ts test/emailNotifications.test.ts test/scheduledEmails.test.ts"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "nodemailer": "^9.0.5",
+    "node-cron": "^4.6.0",
     "nodemailer": "^7.0.10",
     "pg": "^8.13.1"
   },
@@ -23,7 +23,6 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.2",
-    "@types/nodemailer": "^7.0.3",
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.11.10",
     "tsx": "^4.19.2",
