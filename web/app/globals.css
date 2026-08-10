@@ -20,6 +20,7 @@ a {
 table {
   border-collapse: collapse;
   margin-top: 12px;
+  width: 100%;
 }
 
 th,
@@ -65,4 +66,61 @@ form label span {
 
 .counts td {
   font-size: 18px;
+}
+
+.public-page {
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+.intro {
+  margin-bottom: 24px;
+}
+
+.intro p,
+.state,
+li {
+  line-height: 1.5;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.policy-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 28px;
+}
+
+.state {
+  background: #f7f7f7;
+  border: 1px solid #ddd;
+  padding: 12px;
+}
+
+.error {
+  border-color: #d66;
+  background: #fff5f5;
+}
+
+@media (max-width: 720px) {
+  body {
+    margin: 16px;
+  }
+
+  nav a {
+    display: inline-block;
+    margin-bottom: 8px;
+  }
+
+  .policy-grid {
+    grid-template-columns: 1fr;
+  }
+
+  th,
+  td {
+    white-space: nowrap;
+  }
 }
