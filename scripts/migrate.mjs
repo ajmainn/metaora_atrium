@@ -55,12 +55,28 @@ try {
     )
   `);
 
-  // 001_init.sql was already applied before migration tracking existed.
-  await client.query(`
-    INSERT INTO schema_migrations (filename)
-    VALUES ('001_init.sql')
-    ON CONFLICT (filename) DO NOTHING
-  `);
+  const baseMigration = await client.query(
+    'SELECT 1 FROM schema_migrations WHERE filename = $1',
+    ['001_init.sql']
+  );
+
+  if (baseMigration.rowCount === 0) {
+    const existingBaseSchema = await client.query(`
+      SELECT
+        to_regclass('public.person') IS NOT NULL
+        AND to_regclass('public.room') IS NOT NULL
+        AND to_regclass('public.session') IS NOT NULL
+        AND to_regclass('public.enrolment') IS NOT NULL
+        AND to_regclass('public.check_in') IS NOT NULL AS exists
+    `);
+
+    if (existingBaseSchema.rows[0].exists) {
+      await client.query(
+        'INSERT INTO schema_migrations (filename) VALUES ($1)',
+        ['001_init.sql']
+      );
+    }
+  }
 
   for (const file of files) {
     const applied = await client.query(
