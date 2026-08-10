@@ -57,6 +57,106 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.get('/dashboard', requireSession, async (_req, res) => {
+  try {
+    const person = res.locals.person;
+    const now = new Date().toISOString();
+    const isUpcoming = (value: unknown) => new Date(value as string | Date).getTime() >= Date.now();
+
+    if (person.kind === 'participant') {
+      const bookings = await query(
+        `select e.id as enrolment_id, e.status as enrolment_status, e.credits_charged,
+                e.credits_refunded, e.enrolled_at, e.cancelled_at,
+                s.id, s.discipline, s.session_type, s.status, s.starts_at, s.ends_at,
+                s.seat_fee_credits, r.name as room_name
+           from enrolment e
+           join session s on s.id = e.session_id
+           join room r on r.id = s.room_id
+          where e.person_id = $1
+          order by s.starts_at`,
+        [person.id]
+      );
+
+      res.json({
+        upcoming_bookings: bookings.filter(
+          (booking) => booking.enrolment_status === 'active' && booking.status === 'scheduled' && isUpcoming(booking.starts_at)
+        ),
+        history: bookings.filter(
+          (booking) => booking.enrolment_status !== 'active' || booking.status !== 'scheduled' || !isUpcoming(booking.starts_at)
+        )
+      });
+      return;
+    }
+
+    if (person.kind === 'coach') {
+      const ownSessions = await query(
+        `select s.id, s.discipline, s.session_type, s.status, s.starts_at, s.ends_at,
+                s.seat_fee_credits, r.name as room_name,
+                count(e.id)::int as enrolled_count
+           from session s
+           join room r on r.id = s.room_id
+           left join enrolment e on e.session_id = s.id and e.status = 'active'
+          where s.coach_id = $1 and s.starts_at >= $2
+          group by s.id, r.id
+          order by s.starts_at`,
+        [person.id, now]
+      );
+
+      const ownSessionIds = ownSessions.map((session) => session.id);
+      const attendees =
+        ownSessionIds.length === 0
+          ? []
+          : await query(
+              `select e.session_id, e.id as enrolment_id, e.status, e.credits_charged,
+                      e.credits_refunded, e.enrolled_at, e.cancelled_at,
+                      p.id as person_id, p.full_name, p.email
+                 from enrolment e
+                 join person p on p.id = e.person_id
+                where e.session_id = any($1::int[])
+                order by e.session_id, p.full_name`,
+              [ownSessionIds]
+            );
+
+      const attending = await query(
+        `select e.id as enrolment_id, e.status as enrolment_status, e.credits_charged,
+                e.credits_refunded, e.enrolled_at, e.cancelled_at,
+                s.id, s.discipline, s.session_type, s.status, s.starts_at, s.ends_at,
+                s.seat_fee_credits, r.name as room_name, c.full_name as coach_name
+           from enrolment e
+           join session s on s.id = e.session_id
+           join room r on r.id = s.room_id
+           join person c on c.id = s.coach_id
+          where e.person_id = $1 and e.status = 'active' and s.status = 'scheduled'
+          order by s.starts_at`,
+        [person.id]
+      );
+
+      const busy = await query(
+        `select s.id, s.discipline, s.session_type, s.starts_at, s.ends_at
+           from session s
+          where s.coach_id <> $1 and s.status = 'scheduled' and s.starts_at >= $2
+          order by s.starts_at`,
+        [person.id, now]
+      );
+
+      res.json({
+        own_sessions: ownSessions.map((session) => ({
+          ...session,
+          attendees: attendees.filter((attendee) => attendee.session_id === session.id)
+        })),
+        attending,
+        busy
+      });
+      return;
+    }
+
+    res.status(403).json({ error: 'forbidden' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'could not load dashboard sessions' });
+  }
+});
+
 router.get('/:id', requireSession, async (req, res) => {
   try {
     const id = Number(req.params.id);

@@ -105,6 +105,74 @@ li {
   background: #fff5f5;
 }
 
+.dashboard-page {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.dashboard-header {
+  align-items: flex-start;
+  border-bottom: 1px solid #ddd;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+}
+
+.dashboard-header p {
+  margin: 4px 0 0;
+}
+
+.dashboard-header strong {
+  background: #f2f2f2;
+  border: 1px solid #ddd;
+  padding: 8px 10px;
+}
+
+.panel {
+  margin-top: 24px;
+}
+
+button {
+  background: #111;
+  border: 1px solid #111;
+  color: #fff;
+  cursor: pointer;
+  padding: 6px 10px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.session-list {
+  display: grid;
+  gap: 14px;
+}
+
+.session-card {
+  border: 1px solid #ddd;
+  padding: 12px;
+}
+
+.session-card h3 {
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+.session-card p {
+  margin: 4px 0;
+}
+
+.session-card-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
 @media (max-width: 720px) {
   body {
     margin: 16px;
@@ -122,5 +190,16 @@ li {
   th,
   td {
     white-space: nowrap;
+  }
+
+  .dashboard-header,
+  .session-card-head {
+    display: block;
+  }
+
+  .dashboard-header strong,
+  .session-card-head button {
+    display: inline-block;
+    margin-top: 8px;
   }
 }

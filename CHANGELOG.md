@@ -164,6 +164,32 @@ Why:
 - Ownership and status checks must happen at the API so users cannot cancel or inspect another person's enrolment.
 - The refund and balance update need to be atomic to avoid partial cancellation states.
 
+## Participant and Coach Dashboards
+
+- Updated `api/src/routes/sessions.ts`
+  - Added authenticated `GET /api/sessions/dashboard`.
+  - For participants, returns only the caller's own upcoming bookings and history.
+  - For coaches, returns own sessions with attendee details, sessions the coach is attending, and other coaches' sessions as busy periods without attendee data.
+
+- Updated `web/app/participant/page.tsx`
+  - Replaced the placeholder page with a usable participant dashboard.
+  - Shows credit balance, upcoming own bookings, past/cancelled bookings, and available upcoming sessions.
+  - Added Book and Cancel actions using the existing booking and enrolment cancellation endpoints.
+  - Refreshes dashboard data after booking or cancellation.
+
+- Updated `web/app/coach/page.tsx`
+  - Replaced the placeholder page with a usable coach dashboard.
+  - Shows credit balance, own upcoming sessions, allowed attendee details, sessions the coach is attending, and other coach busy periods.
+  - Added Cancel Session action using the existing coach cancellation endpoint.
+
+- Updated `web/app/globals.css`
+  - Added simple responsive dashboard, panel, card, and button styles.
+
+Why:
+- The assignment demo needs participant and coach screens that visibly exercise the implemented booking/cancellation flows.
+- Role-specific dashboard data avoids leaking other participant information to the browser.
+- The UI stays intentionally simple and reuses the existing API/CSS patterns.
+
 ## Verification
 
 - Existing tests pass with `npm.cmd test`.
