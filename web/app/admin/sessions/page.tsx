@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 type Room = { id: number; name: string; capacity: number };
 type Person = { id: number; full_name: string; email: string; kind: string };
@@ -17,6 +18,7 @@ type Session = {
   enrolled_count: number;
   places_remaining: number;
 };
+type Me = { kind: string };
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
@@ -53,10 +55,12 @@ function startOfWeek(date: Date) {
 }
 
 export default function AdminSessions() {
+  const router = useRouter();
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
   const [sessions, setSessions] = useState<Session[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
+  const [authorized, setAuthorized] = useState(false);
 
   const [date, setDate] = useState('');
   const [startTime, setStartTime] = useState('');
@@ -71,6 +75,8 @@ export default function AdminSessions() {
   );
 
   function loadSessions() {
+    if (!authorized) return;
+
     const to = new Date(weekStart.getTime() + 7 * dayMilliseconds);
 
     fetch(
@@ -82,10 +88,25 @@ export default function AdminSessions() {
   }
 
   useEffect(() => {
-    loadSessions();
-  }, [weekStart]);
+    fetch(`${apiBaseUrl}/api/me`, { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((me: Me) => {
+        if (me.kind !== 'admin') {
+          router.push(me.kind === 'coach' ? '/coach' : '/participant');
+          return;
+        }
+        setAuthorized(true);
+      })
+      .catch(() => router.push('/login'));
+  }, [router]);
 
   useEffect(() => {
+    loadSessions();
+  }, [weekStart, authorized]);
+
+  useEffect(() => {
+    if (!authorized) return;
+
     fetch(`${apiBaseUrl}/api/rooms`, { credentials: 'include' })
       .then((res) => res.json())
       .then(setRooms);
@@ -93,7 +114,7 @@ export default function AdminSessions() {
     fetch(`${apiBaseUrl}/api/people`, { credentials: 'include' })
       .then((res) => res.json())
       .then(setPeople);
-  }, []);
+  }, [authorized]);
 
   function sessionsFor(day: Date, hour: number) {
     return sessions.filter((session) => {
@@ -109,6 +130,7 @@ export default function AdminSessions() {
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!authorized) return;
 
     await fetch(`${apiBaseUrl}/api/sessions`, {
       method: 'POST',
@@ -126,6 +148,8 @@ export default function AdminSessions() {
 
     loadSessions();
   }
+
+  if (!authorized) return <main><p className="state">Loading...</p></main>;
 
   return (
     <main>

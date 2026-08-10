@@ -41,6 +41,24 @@ Short tracking notes for implementation work and why each change was made.
   - Added minimal responsive styling for the public catalogue.
   - Improved table behavior on small screens.
 
+## Unified Login and Role Access
+
+- Updated `api/src/auth.ts`
+  - Kept the existing signed-cookie session flow.
+  - Added active-user checks and role-aware current-user loading.
+  - Replaced new password hashes with scrypt while preserving seed SHA-256 login compatibility.
+
+- Updated protected API routes
+  - Made `/api/people` admin-only.
+  - Limited `/api/rooms` to admins and coaches.
+  - Filtered session detail responses by authenticated role.
+  - Restricted session write/cancel paths to admins and owning coaches.
+
+- Updated login and dashboard pages
+  - Login now redirects by authenticated role.
+  - Added minimal participant and coach dashboards.
+  - Added basic admin-page guards.
+
 ## Verification
 
 - Existing tests pass with `npm.cmd test`.

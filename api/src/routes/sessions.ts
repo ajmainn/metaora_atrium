@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../db';
-import { requireSession } from '../auth';
+import { requireRole, requireSession } from '../auth';
 import { hoursOfNotice, refundAmount, refundPercent, roomFee, seatFee } from '../credits';
 
 const router = Router();
@@ -72,33 +72,61 @@ router.get('/:id', requireSession, async (req, res) => {
 
     const session = sessions[0];
     const rooms = await query('select id, name, capacity from room where id = $1', [session.room_id]);
-    const coaches = await query('select id, full_name, email from person where id = $1', [session.coach_id]);
-    const attendees = await query(
-      `select e.id, e.status, e.credits_charged, e.credits_refunded, e.enrolled_at, e.cancelled_at,
-              p.id as person_id, p.full_name, p.email
-         from enrolment e
-         join person p on p.id = e.person_id
-        where e.session_id = $1
-        order by e.id`,
-      [id]
-    );
+    const person = res.locals.person;
+    const isAdmin = person.kind === 'admin';
+    const isCoachOwner = person.kind === 'coach' && person.id === session.coach_id;
 
-    res.json({
+    const response: Record<string, unknown> = {
       ...session,
-      room: rooms.length > 0 ? rooms[0] : null,
-      coach: coaches.length > 0 ? coaches[0] : null,
-      attendees
-    });
+      room: rooms.length > 0 ? rooms[0] : null
+    };
+
+    if (isAdmin || isCoachOwner) {
+      const coaches = await query('select id, full_name, email from person where id = $1', [session.coach_id]);
+      const attendees = await query(
+        `select e.id, e.status, e.credits_charged, e.credits_refunded, e.enrolled_at, e.cancelled_at,
+                p.id as person_id, p.full_name, p.email
+           from enrolment e
+           join person p on p.id = e.person_id
+          where e.session_id = $1
+          order by e.id`,
+        [id]
+      );
+
+      response.coach = coaches.length > 0 ? coaches[0] : null;
+      response.attendees = attendees;
+    } else if (person.kind === 'coach') {
+      response.busy = true;
+    } else {
+      const ownEnrolments = await query(
+        `select id, status, credits_charged, credits_refunded, enrolled_at, cancelled_at
+           from enrolment
+          where session_id = $1 and person_id = $2
+          order by id`,
+        [id, person.id]
+      );
+
+      if (ownEnrolments.length === 0) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+
+      response.enrolments = ownEnrolments;
+    }
+
+    res.json(response);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'could not load the session' });
   }
 });
 
-router.post('/', requireSession, async (req, res) => {
+router.post('/', requireSession, requireRole('admin', 'coach'), async (req, res) => {
   try {
     const body = req.body || {};
-    const { room_id, coach_id, discipline, session_type, starts_at, ends_at } = body;
+    const person = res.locals.person;
+    const { room_id, discipline, session_type, starts_at, ends_at } = body;
+    const coach_id = person.kind === 'admin' ? body.coach_id : person.id;
 
     if (!room_id || !coach_id || !discipline || !session_type || !starts_at || !ends_at) {
       res.status(400).json({
@@ -113,7 +141,7 @@ router.post('/', requireSession, async (req, res) => {
       return;
     }
 
-    const coaches = await query('select id, credits from person where id = $1', [coach_id]);
+    const coaches = await query("select id, credits from person where id = $1 and kind = 'coach' and active = true", [coach_id]);
     if (coaches.length === 0) {
       res.status(400).json({ error: 'no such coach' });
       return;
@@ -159,7 +187,7 @@ router.post('/', requireSession, async (req, res) => {
   }
 });
 
-router.patch('/:id', requireSession, async (req, res) => {
+router.patch('/:id', requireSession, requireRole('admin', 'coach'), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
@@ -168,12 +196,25 @@ router.patch('/:id', requireSession, async (req, res) => {
     }
 
     const body = req.body || {};
+    const existing = await query('select coach_id from session where id = $1', [id]);
+    if (existing.length === 0) {
+      res.status(404).json({ error: 'no such session' });
+      return;
+    }
+
+    if (res.locals.person.kind !== 'admin' && existing[0].coach_id !== res.locals.person.id) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
 
     const assignments: string[] = [];
     const params: unknown[] = [];
 
     for (const field of UPDATABLE_FIELDS) {
       if (body[field] !== undefined) {
+        if (field === 'coach_id' && res.locals.person.kind !== 'admin') {
+          continue;
+        }
         params.push(body[field]);
         assignments.push(`${field} = $${params.length}`);
       }
@@ -203,7 +244,7 @@ router.patch('/:id', requireSession, async (req, res) => {
   }
 });
 
-router.post('/:id/cancel', requireSession, async (req, res) => {
+router.post('/:id/cancel', requireSession, requireRole('admin', 'coach'), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
@@ -219,6 +260,11 @@ router.post('/:id/cancel', requireSession, async (req, res) => {
     }
 
     const session = sessions[0];
+    if (res.locals.person.kind !== 'admin' && session.coach_id !== res.locals.person.id) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+
     if (session.status === 'cancelled') {
       res.status(409).json({ error: 'that session is already cancelled' });
       return;

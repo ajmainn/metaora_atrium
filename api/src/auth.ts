@@ -5,13 +5,61 @@ import { query } from './db';
 export const SESSION_COOKIE = 'atrium_session';
 
 const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 12;
+const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, keylen: 64 };
+
+type PersonKind = 'participant' | 'coach' | 'admin';
+type AuthedPerson = {
+  id: number;
+  email: string;
+  full_name: string;
+  kind: PersonKind;
+  credits: string;
+  active: boolean;
+};
 
 function sessionSecret(): string {
   return process.env.SESSION_SECRET || 'change-me';
 }
 
 export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const key = crypto.scryptSync(password, salt, SCRYPT_PARAMS.keylen, {
+    N: SCRYPT_PARAMS.N,
+    r: SCRYPT_PARAMS.r,
+    p: SCRYPT_PARAMS.p
+  });
+  return `scrypt$${SCRYPT_PARAMS.N}$${SCRYPT_PARAMS.r}$${SCRYPT_PARAMS.p}$${salt}$${key.toString('hex')}`;
+}
+
+function legacyHashPassword(password: string): string {
   return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, 'hex');
+  const right = Buffer.from(b, 'hex');
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function verifyPassword(password: string, stored: string): boolean {
+  const parts = stored.split('$');
+  if (parts[0] !== 'scrypt' || parts.length !== 6) {
+    return safeEqual(legacyHashPassword(password), stored);
+  }
+
+  const [, n, r, p, salt, expected] = parts;
+  const key = crypto.scryptSync(password, salt, Buffer.from(expected, 'hex').length, {
+    N: Number(n),
+    r: Number(r),
+    p: Number(p)
+  });
+  return safeEqual(key.toString('hex'), expected);
+}
+
+function dashboardFor(kind: PersonKind): string {
+  if (kind === 'admin') return '/admin';
+  if (kind === 'coach') return '/coach';
+  return '/participant';
 }
 
 export function signSession(personId: number, issuedAt: number = Date.now()): string {
@@ -38,14 +86,51 @@ export function readSession(cookie: string | undefined): { personId: number; iss
   return { personId, issuedAt };
 }
 
-export function requireSession(req: Request, res: Response, next: NextFunction): void {
+export async function requireSession(req: Request, res: Response, next: NextFunction): Promise<void> {
   const session = readSession(req.cookies ? req.cookies[SESSION_COOKIE] : undefined);
   if (!session) {
     res.status(401).json({ error: 'not signed in' });
     return;
   }
-  res.locals.personId = session.personId;
-  next();
+
+  try {
+    const people = await query<AuthedPerson>(
+      'select id, email, full_name, kind, credits, active from person where id = $1',
+      [session.personId]
+    );
+
+    if (people.length === 0) {
+      res.status(401).json({ error: 'not signed in' });
+      return;
+    }
+
+    if (!people[0].active) {
+      res.status(403).json({ error: 'account is inactive' });
+      return;
+    }
+
+    res.locals.personId = people[0].id;
+    res.locals.person = people[0];
+    next();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'could not verify the session' });
+  }
+}
+
+export function requireRole(...roles: PersonKind[]) {
+  return (_req: Request, res: Response, next: NextFunction): void => {
+    const person = res.locals.person as AuthedPerson | undefined;
+    if (!person) {
+      res.status(401).json({ error: 'not signed in' });
+      return;
+    }
+    if (!roles.includes(person.kind)) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    next();
+  };
 }
 
 export async function login(req: Request, res: Response): Promise<void> {
@@ -59,7 +144,7 @@ export async function login(req: Request, res: Response): Promise<void> {
 
   try {
     const people = await query(
-      'select id, email, full_name, kind, password_hash from person where email = $1',
+      'select id, email, full_name, kind, password_hash, active from person where email = $1',
       [email]
     );
 
@@ -69,9 +154,18 @@ export async function login(req: Request, res: Response): Promise<void> {
     }
 
     const person = people[0];
-    if (hashPassword(password) !== person.password_hash) {
+    if (!person.active) {
+      res.status(403).json({ error: 'account is inactive' });
+      return;
+    }
+
+    if (!verifyPassword(password, person.password_hash)) {
       res.status(401).json({ error: 'wrong password' });
       return;
+    }
+
+    if (!person.password_hash.startsWith('scrypt$')) {
+      await query('update person set password_hash = $1 where id = $2', [hashPassword(password), person.id]);
     }
 
     res.cookie(SESSION_COOKIE, signSession(person.id), {
@@ -85,7 +179,8 @@ export async function login(req: Request, res: Response): Promise<void> {
       id: person.id,
       email: person.email,
       full_name: person.full_name,
-      kind: person.kind
+      kind: person.kind,
+      dashboard: dashboardFor(person.kind)
     });
   } catch (err) {
     console.error(err);
@@ -99,20 +194,5 @@ export function logout(_req: Request, res: Response): void {
 }
 
 export async function me(_req: Request, res: Response): Promise<void> {
-  try {
-    const people = await query(
-      'select id, email, full_name, kind, credits, active from person where id = $1',
-      [res.locals.personId]
-    );
-
-    if (people.length === 0) {
-      res.status(401).json({ error: 'not signed in' });
-      return;
-    }
-
-    res.json(people[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'could not load the current user' });
-  }
+  res.json(res.locals.person);
 }

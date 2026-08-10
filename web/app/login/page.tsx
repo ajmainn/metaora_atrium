@@ -9,6 +9,7 @@ export default function Login() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -21,7 +22,10 @@ export default function Login() {
     });
 
     if (res.ok) {
-      router.push('/admin');
+      const person = await res.json();
+      router.push(person.dashboard);
+    } else {
+      setError('Could not sign in with those details.');
     }
   }
 
@@ -47,6 +51,7 @@ export default function Login() {
             onChange={(event) => setPassword(event.target.value)}
           />
         </label>
+        {error ? <p className="state error">{error}</p> : null}
         <button type="submit">Log in</button>
       </form>
     </main>
