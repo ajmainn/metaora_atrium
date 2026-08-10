@@ -3,7 +3,7 @@ import { query, withTransaction } from '../db';
 import { requireRole, requireSession } from '../auth';
 import { applyCoachCancellation } from '../sessionCancellation';
 import { createSessionBooking, SessionCreationError } from '../sessionCreation';
-import { enrolInSession, SessionEnrolmentError } from '../sessionEnrolment';
+import { cancelOwnEnrolment, enrolInSession, SessionEnrolmentError } from '../sessionEnrolment';
 
 const router = Router();
 
@@ -263,6 +263,37 @@ router.post('/:id/book', requireSession, async (req, res) => {
 
     console.error(err);
     res.status(500).json({ error: 'could not book the session' });
+  }
+});
+
+router.post('/:id/enrolments/:enrolmentId/cancel', requireSession, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const enrolmentId = Number(req.params.enrolmentId);
+    if (!Number.isInteger(id) || !Number.isInteger(enrolmentId)) {
+      res.status(404).json({ error: 'no such enrolment' });
+      return;
+    }
+
+    const enrolment = await withTransaction(
+      (client) => cancelOwnEnrolment(client, id, enrolmentId, res.locals.personId),
+      { isolationLevel: 'serializable' }
+    );
+
+    res.json(enrolment);
+  } catch (err) {
+    if (err instanceof SessionEnrolmentError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '40001') {
+      res.status(409).json({ error: 'cancellation conflict, please retry' });
+      return;
+    }
+
+    console.error(err);
+    res.status(500).json({ error: 'could not cancel the enrolment' });
   }
 });
 

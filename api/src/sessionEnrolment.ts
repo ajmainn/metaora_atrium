@@ -1,4 +1,5 @@
 import { PoolClient, QueryResultRow } from 'pg';
+import { hoursOfNotice, refundAmount } from './credits';
 
 type SessionForEnrolment = QueryResultRow & {
   id: number;
@@ -15,10 +16,30 @@ type PersonForEnrolment = QueryResultRow & {
   credits: string | number;
 };
 
+type EnrolmentForCancellation = QueryResultRow & {
+  id: number;
+  session_id: number;
+  person_id: number;
+  status: string;
+  credits_charged: string | number;
+  credits_refunded: string | number;
+  enrolled_at: string | Date;
+  cancelled_at: string | Date | null;
+  session_status: string;
+  starts_at: string | Date;
+};
+
 export class SessionEnrolmentError extends Error {
   constructor(public status: number, message: string) {
     super(message);
   }
+}
+
+export function participantRefundPercent(hoursNotice: number): number {
+  if (hoursNotice >= 48) return 1;
+  if (hoursNotice >= 24) return 0.5;
+  if (hoursNotice >= 12) return 0.25;
+  return 0;
 }
 
 export async function enrolInSession(
@@ -128,4 +149,64 @@ export async function enrolInSession(
   );
 
   return inserted.rows[0];
+}
+
+export async function cancelOwnEnrolment(
+  client: Pick<PoolClient, 'query'>,
+  sessionId: number,
+  enrolmentId: number,
+  personId: number,
+  cancelledAt: Date = new Date()
+) {
+  const enrolments = await client.query<EnrolmentForCancellation>(
+    `select e.id, e.session_id, e.person_id, e.status, e.credits_charged, e.credits_refunded,
+            e.enrolled_at, e.cancelled_at, s.status as session_status, s.starts_at
+       from enrolment e
+       join session s on s.id = e.session_id
+      where e.id = $1 and e.session_id = $2
+      for update of e`,
+    [enrolmentId, sessionId]
+  );
+
+  if (enrolments.rows.length === 0) {
+    throw new SessionEnrolmentError(404, 'no such enrolment');
+  }
+
+  const enrolment = enrolments.rows[0];
+  if (enrolment.person_id !== personId) {
+    throw new SessionEnrolmentError(403, 'cannot cancel another person enrolment');
+  }
+
+  if (enrolment.status === 'cancelled') {
+    throw new SessionEnrolmentError(409, 'enrolment is already cancelled');
+  }
+
+  if (enrolment.session_status === 'cancelled') {
+    throw new SessionEnrolmentError(409, 'session cancellation has already handled enrolment refunds');
+  }
+
+  const percent = participantRefundPercent(hoursOfNotice(cancelledAt, new Date(enrolment.starts_at)));
+  const refund = refundAmount(Number(enrolment.credits_charged), percent);
+
+  await client.query('select id from person where id = $1 for update', [personId]);
+
+  const updated = await client.query(
+    `update enrolment
+        set status = 'cancelled', credits_refunded = $1, cancelled_at = now()
+      where id = $2 and person_id = $3 and status = 'active'
+      returning id, session_id, person_id, status, credits_charged, credits_refunded, enrolled_at, cancelled_at`,
+    [refund, enrolmentId, personId]
+  );
+
+  if (updated.rows.length === 0) {
+    throw new SessionEnrolmentError(409, 'enrolment is already cancelled');
+  }
+
+  await client.query('update person set credits = credits + $1 where id = $2', [refund, personId]);
+
+  return {
+    ...updated.rows[0],
+    refund_percent: percent,
+    credits_refunded_now: refund
+  };
 }

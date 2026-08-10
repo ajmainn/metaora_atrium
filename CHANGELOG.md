@@ -140,6 +140,30 @@ Why:
 - The API must enforce capacity, duplicate, credit, and commitment rules rather than relying on UI behavior.
 - Session/person locking plus serializable isolation keeps capacity and balance updates concurrency-safe.
 
+## Participant Booking Cancellation Refunds
+
+- Updated `api/src/sessionEnrolment.ts`
+  - Added participant-side enrolment cancellation logic.
+  - Added the participant refund tiers from the public page: 100%, 50%, 25%, or 0% based on notice before session start.
+  - Reuses `hoursOfNotice` and `refundAmount` so refund timing and integer rounding stay consistent with existing credit helpers.
+  - Allows participants and coaches attending as participants to cancel only their own active enrolments.
+  - Rejects another person's enrolment, already-cancelled enrolments, and enrolments whose session has already been coach-cancelled.
+  - Updates enrolment status, `credits_refunded`, and `cancelled_at` without changing `credits_charged`.
+  - Locks the enrolment and person row, then credits the user's balance in the same transaction.
+
+- Updated `api/src/routes/sessions.ts`
+  - Added authenticated `POST /api/sessions/:id/enrolments/:enrolmentId/cancel`.
+  - Runs participant-side cancellation in a serializable transaction.
+  - Returns only the caller's updated enrolment/refund result.
+
+- Added `api/test/sessionEnrolmentCancellation.test.ts`
+  - Covers all participant refund tiers, integer rounding, own-cancellation for participants and coaches, ownership rejection, already-cancelled rejection, balance updates, and enrolment field updates.
+
+Why:
+- Participants need a safe way to cancel their own paid bookings and receive the public-page refund policy.
+- Ownership and status checks must happen at the API so users cannot cancel or inspect another person's enrolment.
+- The refund and balance update need to be atomic to avoid partial cancellation states.
+
 ## Verification
 
 - Existing tests pass with `npm.cmd test`.
