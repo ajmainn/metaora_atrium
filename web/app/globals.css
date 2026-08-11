@@ -794,6 +794,24 @@ textarea:hover {
   display: flex;
 }
 
+.attendance-toggle {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  min-width: 116px;
+}
+
+.attendance-toggle input {
+  min-height: auto;
+  width: auto;
+}
+
+.attendance-toggle span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .auth-page {
   max-width: 440px;
 }

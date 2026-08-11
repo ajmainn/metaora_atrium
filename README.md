@@ -8,8 +8,12 @@ Atrium is a Node, PostgreSQL, and Next.js booking system. Times shown to users a
 2. Copy `env.example` to `.env` and set `DATABASE_URL` and `SESSION_SECRET`.
 3. Run `npm install`.
 4. Run `npm run migrate`.
-5. Run `npm run dev:api` and `npm run dev:web` in separate terminals.
-6. Open `http://localhost:3000`.
+5. Start Mailpit so development emails are captured locally. With the Mailpit
+   binary installed, run `mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025`.
+   The default `.env` SMTP settings already point at `localhost:1025`; open
+   `http://localhost:8025` to view all captured mail.
+6. Run `npm run dev:api` and `npm run dev:web` in separate terminals.
+7. Open `http://localhost:3000`.
 
 Development logins are `admin@atrium.local` / `admin`, `oscar.lindqvist@atrium.local` / `coach123`, and `sofia.marino@atrium.local` / `participant123`. They are local seed credentials and must not be used in production.
 
@@ -52,7 +56,7 @@ Rescheduling preserves the existing session and active enrolments. Only schedule
 
 The schema enforces valid roles, statuses, session types and durations; positive room capacity; integer and nonnegative credits; valid refund ranges; case-insensitive unique emails; one active enrolment per person/session; and one non-voided check-in per enrolment. Application transactions enforce room, coach, participant-overlap, capacity, ownership, notice, and balance rules because those checks span multiple rows or depend on the acting user.
 
-Session creation, session rescheduling, signed-in booking, anonymous visitor booking, participant cancellation, coach cancellation, and password setup use serializable transactions. Row locks and guarded updates protect balances, capacity, token use, and duplicate-account checks. Serializable isolation prevents committed serialization anomalies, but callers must still retry a transaction rejected with a serialization failure; the current HTTP layer reports such a failure rather than retrying automatically. Login/logout use their existing single-statement/default-isolation paths.
+Session creation, session rescheduling, signed-in booking, anonymous visitor booking, participant cancellation, coach cancellation, attendance/check-in writes, and password setup use serializable transactions. Row locks and guarded updates protect balances, capacity, token use, duplicate-account checks, and the single active non-voided check-in per enrolment. Serializable isolation prevents committed serialization anomalies, but callers must still retry a transaction rejected with a serialization failure; the current HTTP layer reports such a failure rather than retrying automatically. Login/logout use their existing single-statement/default-isolation paths.
 
 ## Assumptions And Unfinished Work
 
@@ -60,5 +64,7 @@ The centre timezone is New York, cancelled sessions and enrolments do not consum
 
 The assistant has one role-aware endpoint, permission-filtered tools, anonymous
 and participant actions, coach/admin cancellation and rescheduling, and a
-stub/Ollama-compatible provider switch. The attendance/check-in workflow remains
-read-only; new check-in writes are unfinished.
+stub/Ollama-compatible provider switch. Participant booking changes are handled
+as cancel-and-rebook: cancellation applies the published refund policy, and the
+new booking runs through the normal capacity, overlap, credit and notification
+rules.

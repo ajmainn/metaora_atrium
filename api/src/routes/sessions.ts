@@ -5,6 +5,7 @@ import { applyCoachCancellation } from '../sessionCancellation';
 import { createSessionBooking, SessionCreationError } from '../sessionCreation';
 import { cancelOwnEnrolment, enrolInSession, SessionEnrolmentError } from '../sessionEnrolment';
 import { rescheduleSession, SessionRescheduleError } from '../sessionReschedule';
+import { setEnrolmentCheckIn, CheckInError } from '../checkIns';
 import {
   bookSessionAsAnonymousVisitor,
   sendPasswordSetupEmail,
@@ -121,9 +122,12 @@ export async function adminCalendarSessions(
       : await queryFn(
           `select e.session_id, e.id as enrolment_id, e.status, e.credits_charged,
                   e.credits_refunded, e.enrolled_at, e.cancelled_at,
-                  p.id as person_id, p.full_name, p.email, p.kind
+                  p.id as person_id, p.full_name, p.email, p.kind,
+                  (ci.id is not null) as checked_in,
+                  ci.checked_in_at
              from enrolment e
              join person p on p.id = e.person_id
+             left join check_in ci on ci.enrolment_id = e.id and ci.voided_at is null
             where e.session_id = any($1::int[])
             order by e.session_id, p.full_name`,
           [ids]
@@ -257,9 +261,12 @@ router.get('/dashboard', requireSession, async (_req, res) => {
           : await query(
               `select e.session_id, e.id as enrolment_id, e.status, e.credits_charged,
                       e.credits_refunded, e.enrolled_at, e.cancelled_at,
-                      p.id as person_id, p.full_name, p.email
+                      p.id as person_id, p.full_name, p.email,
+                      (ci.id is not null) as checked_in,
+                      ci.checked_in_at
                  from enrolment e
                  join person p on p.id = e.person_id
+                 left join check_in ci on ci.enrolment_id = e.id and ci.voided_at is null
                 where e.session_id = any($1::int[])
                 order by e.session_id, p.full_name`,
               [ownSessionIds]
@@ -332,9 +339,12 @@ router.get('/:id', requireSession, async (req, res) => {
       const coaches = await query('select id, full_name, email from person where id = $1', [session.coach_id]);
       const attendees = await query(
         `select e.id, e.status, e.credits_charged, e.credits_refunded, e.enrolled_at, e.cancelled_at,
-                p.id as person_id, p.full_name, p.email
+                p.id as person_id, p.full_name, p.email,
+                (ci.id is not null) as checked_in,
+                ci.checked_in_at
            from enrolment e
            join person p on p.id = e.person_id
+           left join check_in ci on ci.enrolment_id = e.id and ci.voided_at is null
           where e.session_id = $1
           order by e.id`,
         [id]
@@ -624,6 +634,48 @@ router.post('/:id/enrolments/:enrolmentId/cancel', requireSession, requireRole('
 
     console.error(err);
     res.status(500).json({ error: 'could not cancel the enrolment' });
+  }
+});
+
+router.post('/:id/enrolments/:enrolmentId/check-in', requireSession, requireRole('admin', 'coach'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const enrolmentId = Number(req.params.enrolmentId);
+    if (!Number.isInteger(id) || !Number.isInteger(enrolmentId)) {
+      res.status(404).json({ error: 'no such enrolment' });
+      return;
+    }
+
+    if (!req.body || typeof req.body.checked_in !== 'boolean') {
+      res.status(400).json({ error: 'checked_in must be true or false' });
+      return;
+    }
+
+    const result = await withTransaction(
+      (client) =>
+        setEnrolmentCheckIn(client, id, enrolmentId, res.locals.person, req.body.checked_in),
+      { isolationLevel: 'serializable' }
+    );
+
+    res.json(result);
+  } catch (err) {
+    if (err instanceof CheckInError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '23505') {
+      res.status(409).json({ error: 'enrolment is already checked in' });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '40001') {
+      res.status(409).json({ error: 'check-in conflict, please retry' });
+      return;
+    }
+
+    console.error(err);
+    res.status(500).json({ error: 'could not update attendance' });
   }
 });
 

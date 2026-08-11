@@ -16,6 +16,7 @@ type Attendee = {
   email: string;
   credits_charged: string;
   credits_refunded: string;
+  checked_in: boolean;
 };
 type OwnSession = {
   id: number;
@@ -44,11 +45,24 @@ type BusySession = {
   starts_at: string;
   ends_at: string;
 };
+type PublicSession = {
+  id: number;
+  discipline: string;
+  session_type: string;
+  starts_at: string;
+  ends_at: string;
+  room_name: string;
+  room_capacity: number;
+  places_remaining: number;
+  seat_fee_credits: string;
+};
 type Dashboard = { own_sessions: OwnSession[]; attending: AttendingSession[]; busy: BusySession[] };
-type CoachView = 'calendar' | 'teaching' | 'attending' | 'busy';
+type CoachView = 'calendar' | 'teaching' | 'create' | 'available' | 'attending' | 'busy';
 type RescheduleDraft = { date: string; startTime: string; endTime: string; roomId: string; sessionType: string };
+type CreateDraft = { date: string; startTime: string; endTime: string; discipline: string; sessionType: string; roomId: string };
 
 const typeLabels: Record<string, string> = { short: 'Short', standard: 'Standard', intensive: 'Intensive' };
+const disciplines = ['fitness', 'lifestyle', 'financial', 'nutrition', 'career', 'mindfulness'];
 const pageSize = 10;
 
 function credits(value: string | number) {
@@ -135,6 +149,7 @@ export default function CoachDashboard() {
   const [person, setPerson] = useState<Person | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [sessions, setSessions] = useState<PublicSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -142,13 +157,26 @@ export default function CoachDashboard() {
   const [page, setPage] = useState(0);
   const [reschedulingId, setReschedulingId] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<Record<number, RescheduleDraft>>({});
+  const [createDraft, setCreateDraft] = useState<CreateDraft>({
+    date: '',
+    startTime: '',
+    endTime: '',
+    discipline: disciplines[0],
+    sessionType: 'standard',
+    roomId: ''
+  });
 
   async function loadData() {
     setError('');
-    const [meRes, dashboardRes, roomsRes] = await Promise.all([
+    const from = new Date();
+    const to = new Date(from.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const [meRes, dashboardRes, roomsRes, sessionsRes] = await Promise.all([
       fetch(`${apiBaseUrl}/api/me`, { credentials: 'include' }),
       fetch(`${apiBaseUrl}/api/sessions/dashboard`, { credentials: 'include' }),
-      fetch(`${apiBaseUrl}/api/rooms`, { credentials: 'include' })
+      fetch(`${apiBaseUrl}/api/rooms`, { credentials: 'include' }),
+      fetch(`${apiBaseUrl}/api/sessions?from=${from.toISOString()}&to=${to.toISOString()}`, {
+        credentials: 'include'
+      })
     ]);
 
     if (!meRes.ok) {
@@ -167,6 +195,7 @@ export default function CoachDashboard() {
     }
 
     if (roomsRes.ok) setRooms(await roomsRes.json());
+    if (sessionsRes.ok) setSessions(await sessionsRes.json());
 
     setPerson(me);
     setDashboard(await dashboardRes.json());
@@ -234,6 +263,88 @@ export default function CoachDashboard() {
     }
   }
 
+  async function createSession(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          room_id: Number(createDraft.roomId),
+          discipline: createDraft.discipline,
+          session_type: createDraft.sessionType,
+          starts_at: centreLocalDateTimeToIso(createDraft.date, createDraft.startTime),
+          ends_at: centreLocalDateTimeToIso(createDraft.date, createDraft.endTime)
+        })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Could not create session');
+      }
+      setCreateDraft({
+        date: '',
+        startTime: '',
+        endTime: '',
+        discipline: disciplines[0],
+        sessionType: 'standard',
+        roomId: ''
+      });
+      setPage(0);
+      await loadData();
+      setView('teaching');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create session');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bookSession(id: number) {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/sessions/${id}/book`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Could not book session');
+      }
+      setPage(0);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not book session');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setAttendance(sessionId: number, enrolmentId: number, checkedIn: boolean) {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/sessions/${sessionId}/enrolments/${enrolmentId}/check-in`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ checked_in: checkedIn })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Could not update attendance');
+      }
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update attendance');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading || !person || !dashboard) return <main><p className="state">Loading...</p></main>;
   const calendarDays = Object.entries(groupCalendarItems(coachCalendarItems(dashboard))).sort(
     ([left], [right]) => left.localeCompare(right)
@@ -242,6 +353,12 @@ export default function CoachDashboard() {
   const visibleOwnSessions = dashboard.own_sessions.slice(page * pageSize, (page + 1) * pageSize);
   const visibleAttending = dashboard.attending.slice(page * pageSize, (page + 1) * pageSize);
   const visibleBusy = dashboard.busy.slice(page * pageSize, (page + 1) * pageSize);
+  const ownSessionIds = new Set(dashboard.own_sessions.map((session) => session.id));
+  const attendingSessionIds = new Set(dashboard.attending.map((session) => session.id));
+  const availableSessions = sessions.filter(
+    (session) => session.places_remaining > 0 && !ownSessionIds.has(session.id) && !attendingSessionIds.has(session.id)
+  );
+  const visibleAvailable = availableSessions.slice(page * pageSize, (page + 1) * pageSize);
 
   function selectView(nextView: CoachView) {
     setView(nextView);
@@ -269,6 +386,8 @@ export default function CoachDashboard() {
         {([
           ['calendar', 'Calendar'],
           ['teaching', 'Teaching'],
+          ['create', 'Create'],
+          ['available', 'Available'],
           ['attending', 'Attending'],
           ['busy', 'Busy periods']
         ] as const).map(([value, label]) => (
@@ -411,7 +530,7 @@ export default function CoachDashboard() {
                 {session.attendees.length === 0 ? <p className="state">No attendees yet.</p> : (
                   <div className="table-wrap">
                     <table>
-                      <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Paid</th><th>Refunded</th></tr></thead>
+                      <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Paid</th><th>Refunded</th><th>Attendance</th></tr></thead>
                       <tbody>
                         {session.attendees.map((attendee) => (
                           <tr key={attendee.enrolment_id}>
@@ -420,6 +539,19 @@ export default function CoachDashboard() {
                             <td>{attendee.status}</td>
                             <td>{credits(attendee.credits_charged)}</td>
                             <td>{credits(attendee.credits_refunded)}</td>
+                            <td>
+                              <label className="attendance-toggle">
+                                <input
+                                  checked={Boolean(attendee.checked_in)}
+                                  disabled={busy || attendee.status !== 'active'}
+                                  onChange={(event) =>
+                                    setAttendance(session.id, attendee.enrolment_id, event.target.checked)
+                                  }
+                                  type="checkbox"
+                                />
+                                <span>{attendee.checked_in ? 'Checked in' : 'Absent'}</span>
+                              </label>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -431,6 +563,68 @@ export default function CoachDashboard() {
           </div>
         )}
         <PaginationControls page={page} pageSize={pageSize} totalItems={dashboard.own_sessions.length} onPageChange={setPage} />
+      </section> : null}
+
+      {view === 'create' ? <section className="panel form-panel">
+        <h2>Create session</h2>
+        <form className="form-grid" onSubmit={createSession}>
+          <label>
+            <span>Date</span>
+            <input type="date" value={createDraft.date} onChange={(event) => setCreateDraft((current) => ({ ...current, date: event.target.value }))} required />
+          </label>
+          <label>
+            <span>Starts</span>
+            <input type="time" value={createDraft.startTime} onChange={(event) => setCreateDraft((current) => ({ ...current, startTime: event.target.value }))} required />
+          </label>
+          <label>
+            <span>Ends</span>
+            <input type="time" value={createDraft.endTime} onChange={(event) => setCreateDraft((current) => ({ ...current, endTime: event.target.value }))} required />
+          </label>
+          <label>
+            <span>Discipline</span>
+            <select value={createDraft.discipline} onChange={(event) => setCreateDraft((current) => ({ ...current, discipline: event.target.value }))}>
+              {disciplines.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Type</span>
+            <select value={createDraft.sessionType} onChange={(event) => setCreateDraft((current) => ({ ...current, sessionType: event.target.value }))}>
+              {Object.entries(typeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Room</span>
+            <select value={createDraft.roomId} onChange={(event) => setCreateDraft((current) => ({ ...current, roomId: event.target.value }))} required>
+              <option value="">Select a room</option>
+              {rooms.map((room) => <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>)}
+            </select>
+          </label>
+          <div className="form-actions"><button disabled={busy} type="submit">{busy ? 'Creating...' : 'Create session'}</button></div>
+        </form>
+      </section> : null}
+
+      {view === 'available' ? <section className="panel">
+        <h2>Available sessions</h2>
+        {availableSessions.length === 0 ? <p className="state">No available sessions in the next 14 days.</p> : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Session</th><th>When</th><th>Room</th><th>Fee</th><th>Places</th><th></th></tr></thead>
+              <tbody>
+                {visibleAvailable.map((session) => (
+                  <tr key={session.id}>
+                    <td>{session.discipline} ({typeLabels[session.session_type] || session.session_type})</td>
+                    <td>{formatCentreRange(session.starts_at, session.ends_at)}</td>
+                    <td>{session.room_name}</td>
+                    <td>{credits(session.seat_fee_credits)}</td>
+                    <td>{session.places_remaining} of {session.room_capacity}</td>
+                    <td><button disabled={busy} onClick={() => bookSession(session.id)}>Book</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <PaginationControls page={page} pageSize={pageSize} totalItems={availableSessions.length} onPageChange={setPage} />
       </section> : null}
 
       {view === 'attending' ? <section className="panel">
