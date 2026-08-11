@@ -169,7 +169,7 @@ export async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    if (!verifyPassword(password, person.password_hash)) {
+    if (!person.password_hash || !verifyPassword(password, person.password_hash)) {
       res.status(401).json({ error: 'wrong password' });
       return;
     }

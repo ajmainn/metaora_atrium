@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import PaginationControls from './PaginationControls';
 
+const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
+
 export type CatalogueSession = {
   id: number;
   discipline: string;
@@ -39,7 +41,43 @@ function formatTimeRange(start: string, end: string) {
 
 export default function SessionCatalogue({ sessions }: { sessions: CatalogueSession[] }) {
   const [page, setPage] = useState(0);
+  const [emails, setEmails] = useState<Record<number, string>>({});
+  const [messages, setMessages] = useState<Record<number, { kind: 'ok' | 'error'; text: string }>>({});
+  const [busySessionId, setBusySessionId] = useState<number | null>(null);
   const visibleSessions = sessions.slice(page * pageSize, (page + 1) * pageSize);
+
+  async function book(sessionId: number) {
+    setBusySessionId(sessionId);
+    setMessages((current) => ({ ...current, [sessionId]: { kind: 'ok', text: '' } }));
+
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/sessions/${sessionId}/book-anonymous`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emails[sessionId] || '' })
+      });
+      const body = await res.json().catch(() => ({}));
+
+      if (!res.ok) throw new Error(body.error || 'Could not book that session.');
+
+      setMessages((current) => ({
+        ...current,
+        [sessionId]: {
+          kind: 'ok',
+          text: body.account_created
+            ? 'Booked. Check your email for the password setup link.'
+            : 'Booked. Use your existing account to manage it.'
+        }
+      }));
+    } catch (err) {
+      setMessages((current) => ({
+        ...current,
+        [sessionId]: { kind: 'error', text: err instanceof Error ? err.message : 'Could not book that session.' }
+      }));
+    } finally {
+      setBusySessionId(null);
+    }
+  }
 
   return (
     <>
@@ -53,6 +91,7 @@ export default function SessionCatalogue({ sessions }: { sessions: CatalogueSess
               <th>Type</th>
               <th>Participant fee</th>
               <th>Places remaining</th>
+              <th>Book by email</th>
             </tr>
           </thead>
           <tbody>
@@ -70,6 +109,32 @@ export default function SessionCatalogue({ sessions }: { sessions: CatalogueSess
                 <td className="places-cell">
                   <strong>{session.places_remaining}</strong>
                   <span> of {session.room_capacity}</span>
+                </td>
+                <td>
+                  <div className="inline-booking">
+                    <input
+                      type="email"
+                      value={emails[session.id] || ''}
+                      onChange={(event) =>
+                        setEmails((current) => ({ ...current, [session.id]: event.target.value }))
+                      }
+                      placeholder="you@example.com"
+                      aria-label={`Email for ${session.discipline}`}
+                      disabled={session.places_remaining <= 0 || busySessionId === session.id}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => book(session.id)}
+                      disabled={session.places_remaining <= 0 || busySessionId === session.id}
+                    >
+                      {busySessionId === session.id ? 'Booking...' : 'Book'}
+                    </button>
+                  </div>
+                  {messages[session.id]?.text ? (
+                    <p className={`inline-message ${messages[session.id].kind === 'error' ? 'error-text' : ''}`}>
+                      {messages[session.id].text}
+                    </p>
+                  ) : null}
                 </td>
               </tr>
             ))}

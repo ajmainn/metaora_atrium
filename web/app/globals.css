@@ -299,6 +299,30 @@ tbody tr:last-child td {
   color: var(--muted);
 }
 
+.inline-booking {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  min-width: 300px;
+}
+
+.inline-booking button {
+  min-height: 40px;
+  padding: 8px 12px;
+}
+
+.inline-message {
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 700;
+  margin: 7px 0 0;
+}
+
+.error-text {
+  color: var(--danger);
+}
+
 .policy-grid {
   display: grid;
   gap: 40px;

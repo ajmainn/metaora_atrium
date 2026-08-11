@@ -5,6 +5,11 @@ import { applyCoachCancellation } from '../sessionCancellation';
 import { createSessionBooking, SessionCreationError } from '../sessionCreation';
 import { cancelOwnEnrolment, enrolInSession, SessionEnrolmentError } from '../sessionEnrolment';
 import {
+  bookSessionAsAnonymousVisitor,
+  sendPasswordSetupEmail,
+  PasswordSetupError
+} from '../passwordSetup';
+import {
   notifyCoachCancelledSession,
   notifyParticipantBooked,
   notifyParticipantCancelled,
@@ -388,6 +393,55 @@ router.post('/:id/book', requireSession, requireRole('participant', 'coach'), as
     res.status(201).json(enrolment);
   } catch (err) {
     if (err instanceof SessionEnrolmentError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '23505') {
+      res.status(409).json({ error: 'session is already booked by this person' });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '40001') {
+      res.status(409).json({ error: 'booking conflict, please retry' });
+      return;
+    }
+
+    console.error(err);
+    res.status(500).json({ error: 'could not book the session' });
+  }
+});
+
+router.post('/:id/book-anonymous', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(404).json({ error: 'no such session' });
+      return;
+    }
+
+    const result = await withTransaction(
+      (client) => bookSessionAsAnonymousVisitor(client, id, req.body ? req.body.email : undefined),
+      { isolationLevel: 'serializable' }
+    );
+
+    await notifyAfterSuccess('participant booked', () => notifyParticipantBooked(result.enrolment.id));
+
+    let setupEmailSent = false;
+    if (result.accountCreated && result.setup) {
+      setupEmailSent = await sendPasswordSetupEmail(result.email, result.setup.rawToken);
+    }
+
+    res.status(201).json({
+      enrolment_id: result.enrolment.id,
+      session_id: result.enrolment.session_id,
+      status: result.enrolment.status,
+      credits_charged: result.enrolment.credits_charged,
+      account_created: result.accountCreated,
+      password_setup_email_sent: setupEmailSent
+    });
+  } catch (err) {
+    if (err instanceof SessionEnrolmentError || err instanceof PasswordSetupError) {
       res.status(err.status).json({ error: err.message });
       return;
     }
