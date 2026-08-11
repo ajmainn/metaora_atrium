@@ -178,7 +178,7 @@ test('anonymous booking creates one participant with 4000 credits and stores onl
 
 test('anonymous booking reuses an existing account without issuing initial credits or setup token', async () => {
   const client = fakeClient({
-    existingPerson: { id: 55, email: 'visitor@example.com', credits: 100 }
+    existingPerson: { id: 55, email: 'visitor@example.com', credits: 100, password_hash: 'scrypt$existing' }
   });
 
   const result = await bookSessionAsAnonymousVisitor(client as any, 12, 'VISITOR@example.com');
@@ -187,6 +187,19 @@ test('anonymous booking reuses an existing account without issuing initial credi
   assert.equal(result.enrolment.person_id, 55);
   assert.equal(client.insertedPeople.length, 0);
   assert.equal(client.insertedTokens.length, 0);
+});
+
+test('anonymous booking resends setup for an existing pending participant without new credits', async () => {
+  const client = fakeClient({
+    existingPerson: { id: 55, email: 'visitor@example.com', credits: 100, password_hash: null }
+  });
+
+  const result = await bookSessionAsAnonymousVisitor(client as any, 12, 'VISITOR@example.com');
+
+  assert.equal(result.accountCreated, false);
+  assert.equal(result.enrolment.person_id, 55);
+  assert.equal(client.insertedPeople.length, 0);
+  assert.equal(client.insertedTokens.length, 1);
 });
 
 test('invalid and insufficient anonymous bookings are rejected by existing validation paths', async () => {

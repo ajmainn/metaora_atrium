@@ -127,7 +127,8 @@ export async function bookSessionAsAnonymousVisitor(
 ) {
   const { person, created } = await findOrCreateAnonymousParticipant(client, emailInput);
   const enrolment = await enrolInSession(client, sessionId, person.id);
-  const setup = created ? await createPasswordSetupToken(client, person.id) : null;
+  const needsPasswordSetup = created || (person.kind === 'participant' && !person.password_hash);
+  const setup = needsPasswordSetup ? await createPasswordSetupToken(client, person.id) : null;
 
   return {
     enrolment,
