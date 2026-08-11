@@ -30,6 +30,10 @@ const UNSAFE_SESSION_UPDATE_FIELDS = [
 ];
 
 type SessionViewer = { id: number; kind: 'participant' | 'coach' | 'admin' };
+type QueryFn = <T extends Record<string, unknown> = Record<string, unknown>>(
+  text: string,
+  params?: unknown[]
+) => Promise<T[]>;
 
 export function visibleSessionFields(
   person: SessionViewer,
@@ -64,6 +68,84 @@ export function visibleSessionFields(
 
 export function hasUnsafeSessionMutation(body: Record<string, unknown>): boolean {
   return UNSAFE_SESSION_UPDATE_FIELDS.some((field) => body[field] !== undefined);
+}
+
+export async function adminCalendarSessions(
+  queryFn: QueryFn,
+  fromInput: unknown,
+  toInput: unknown
+): Promise<Record<string, unknown>[]> {
+  const from = typeof fromInput === 'string' && fromInput ? fromInput : new Date().toISOString();
+  const to = typeof toInput === 'string' && toInput ? toInput : null;
+
+  const params: unknown[] = [from];
+  let sql = `select
+                    s.id,
+                    s.room_id,
+                    s.coach_id,
+                    s.discipline,
+                    s.session_type,
+                    s.status,
+                    s.starts_at,
+                    s.ends_at,
+                    s.room_fee_credits,
+                    s.seat_fee_credits,
+                    s.created_at,
+                    r.name as room_name,
+                    r.capacity as room_capacity,
+                    c.full_name as coach_name,
+                    c.email as coach_email,
+                    count(e.id)::int as enrolled_count,
+                    (r.capacity - count(e.id))::int as places_remaining
+               from session s
+               join room r on r.id = s.room_id
+               join person c on c.id = s.coach_id
+               left join enrolment e on e.session_id = s.id and e.status = 'active'
+              where s.starts_at >= $1`;
+
+  if (to) {
+    params.push(to);
+    sql += ` and s.starts_at < $${params.length}`;
+  }
+
+  sql += `
+           group by s.id, r.id, c.id
+           order by s.starts_at`;
+
+  const sessions = await queryFn(sql, params);
+  const ids = sessions.map((session) => Number(session.id)).filter(Number.isInteger);
+
+  const attendees =
+    ids.length === 0
+      ? []
+      : await queryFn(
+          `select e.session_id, e.id as enrolment_id, e.status, e.credits_charged,
+                  e.credits_refunded, e.enrolled_at, e.cancelled_at,
+                  p.id as person_id, p.full_name, p.email, p.kind
+             from enrolment e
+             join person p on p.id = e.person_id
+            where e.session_id = any($1::int[])
+            order by e.session_id, p.full_name`,
+          [ids]
+        );
+
+  return sessions.map((session) => {
+    const room = {
+      id: session.room_id,
+      name: session.room_name,
+      capacity: session.room_capacity
+    };
+
+    return {
+      ...visibleSessionFields({ id: 0, kind: 'admin' }, session, room),
+      coach: {
+        id: session.coach_id,
+        full_name: session.coach_name,
+        email: session.coach_email
+      },
+      attendees: attendees.filter((attendee) => attendee.session_id === session.id)
+    };
+  });
 }
 
 async function notifyAfterSuccess(label: string, fn: () => Promise<void>): Promise<void> {
@@ -111,6 +193,15 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'could not load the calendar' });
+  }
+});
+
+router.get('/admin-calendar', requireSession, requireRole('admin'), async (req, res) => {
+  try {
+    res.json(await adminCalendarSessions(query, req.query.from, req.query.to));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'could not load the admin calendar' });
   }
 });
 

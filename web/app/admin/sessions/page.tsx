@@ -16,16 +16,33 @@ type Room = { id: number; name: string; capacity: number };
 type Person = { id: number; full_name: string; email: string; kind: string };
 type Session = {
   id: number;
+  room_id: number;
+  coach_id: number;
   discipline: string;
   session_type: string;
   status: string;
   starts_at: string;
   ends_at: string;
+  room_fee_credits: string;
+  seat_fee_credits: string;
   room_name: string;
   room_capacity: number;
   coach_name: string;
+  coach_email: string;
   enrolled_count: number;
   places_remaining: number;
+  room: Room;
+  coach: Pick<Person, 'id' | 'full_name' | 'email'>;
+  attendees: Array<{
+    enrolment_id: number;
+    person_id: number;
+    full_name: string;
+    email: string;
+    kind: string;
+    status: string;
+    credits_charged: string;
+    credits_refunded: string;
+  }>;
 };
 type Me = { kind: string };
 type AdminCalendarView = 'schedule' | 'create';
@@ -76,7 +93,7 @@ export default function AdminSessions() {
 
     try {
       const res = await fetch(
-        `${apiBaseUrl}/api/sessions?from=${from.toISOString()}&to=${to.toISOString()}`,
+        `${apiBaseUrl}/api/sessions/admin-calendar?from=${from.toISOString()}&to=${to.toISOString()}`,
         { credentials: 'include' }
       );
       if (!res.ok) throw new Error('Could not load sessions.');
@@ -215,8 +232,14 @@ export default function AdminSessions() {
                   {sessionsFor(day, hour).map((session) => (
                     <div className="entry" key={session.id}>
                       <strong>{session.discipline}</strong>
-                      <span>{session.room_name}</span>
-                      <small>{session.enrolled_count} / {session.room_capacity} places</small>
+                      <span>{session.coach.full_name}</span>
+                      <span>{session.room.name} - {session.status}</span>
+                      <small>{session.enrolled_count} / {session.room.capacity} active places</small>
+                      <small>
+                        {session.attendees.length === 0
+                          ? 'No attendees'
+                          : session.attendees.map((attendee) => `${attendee.full_name} (${attendee.status})`).join(', ')}
+                      </small>
                     </div>
                   ))}
                 </td>
