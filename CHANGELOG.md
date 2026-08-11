@@ -310,3 +310,35 @@ Why:
 Verification:
 - All 62 API tests pass with `npm.cmd test`.
 - API TypeScript and Next.js production builds pass with `npm.cmd run build`.
+
+## Compact Catalogue and Dashboard Views
+
+- Added `web/app/PaginationControls.tsx` and `web/app/SessionCatalogue.tsx`.
+  - Limits the public catalogue to 10 sessions per page with Previous/Next controls.
+  - Preserves all existing catalogue fields, New York time formatting, and responsive table scrolling.
+
+- Updated `web/app/page.tsx`.
+  - Changed fee and booking/refund reference sections to native collapsible disclosures.
+  - Keeps all policy content available without extending the initial page unnecessarily.
+
+- Updated `web/app/participant/page.tsx` and `web/app/coach/page.tsx`.
+  - Added task-focused tabs so only one calendar, booking, teaching, attending, busy-period, or history section is visible at a time.
+  - Limits table views to 10 rows and calendar views to five date groups per page.
+  - Resets pagination after changing tabs or completing a booking/cancellation action.
+
+- Updated `web/app/admin/sessions/page.tsx`.
+  - Separated the weekly schedule and session creation form into two tabs.
+  - Returns to the schedule after a session is created successfully.
+
+- Updated `web/app/globals.css`.
+  - Added shared accessible tab, pagination, and disclosure styling with mobile layouts.
+
+Why:
+- Large seeded datasets made the catalogue and role dashboards excessively long and required substantial scrolling.
+- Tabs keep related workflows together while presenting one task at a time.
+- Pagination bounds page height without removing records or changing API queries, permissions, booking behavior, or business rules.
+- Native disclosure controls reduce public-page length while retaining keyboard accessibility and all assignment policy information.
+
+Verification:
+- Desktop and 375px browser checks confirm the catalogue is bounded to 10 rows and remains horizontally scrollable on narrow screens.
+- Existing API tests and full production builds pass.

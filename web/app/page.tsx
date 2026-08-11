@@ -1,25 +1,10 @@
+import SessionCatalogue, { CatalogueSession } from './SessionCatalogue';
+
 export const dynamic = 'force-dynamic';
 
-type Session = {
-  id: number;
-  discipline: string;
-  session_type: string;
-  starts_at: string;
-  ends_at: string;
-  room_capacity: number;
-  places_remaining: number;
-  seat_fee_credits: string;
-};
+type Session = CatalogueSession;
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
-const centreTimeZone = 'America/New_York';
-
-const typeLabels: Record<string, string> = {
-  short: 'Short',
-  standard: 'Standard',
-  intensive: 'Intensive'
-};
-
 const roomFees = [
   ['Short', '45 min', '30 credits'],
   ['Standard', '60 min', '40 credits'],
@@ -31,31 +16,6 @@ const seatFees = [
   ['Standard', '20 credits'],
   ['Intensive', '60 credits']
 ];
-
-const dateFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: centreTimeZone,
-  weekday: 'short',
-  month: 'short',
-  day: 'numeric'
-});
-
-const timeFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: centreTimeZone,
-  hour: 'numeric',
-  minute: '2-digit'
-});
-
-function formatDate(value: string) {
-  return dateFormatter.format(new Date(value));
-}
-
-function formatTimeRange(start: string, end: string) {
-  return `${timeFormatter.format(new Date(start))} - ${timeFormatter.format(new Date(end))}`;
-}
-
-function credits(value: string) {
-  return `${Number(value).toFixed(0)} credits`;
-}
 
 export default async function PublicSessions() {
   const from = new Date();
@@ -101,45 +61,13 @@ export default async function PublicSessions() {
           <p className="state">No sessions are available in the next 14 days.</p>
         ) : null}
         {!error && sessions.length > 0 ? (
-          <div className="table-wrap">
-            <table className="session-table">
-              <thead>
-                <tr>
-                  <th>Discipline</th>
-                  <th>Date</th>
-                  <th>Time</th>
-                  <th>Type</th>
-                  <th>Participant fee</th>
-                  <th>Places remaining</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sessions.map((session) => (
-                  <tr key={session.id}>
-                    <td><strong className="discipline-name">{session.discipline}</strong></td>
-                    <td>{formatDate(session.starts_at)}</td>
-                    <td>{formatTimeRange(session.starts_at, session.ends_at)}</td>
-                    <td>
-                      <span className={`type-badge type-${session.session_type}`}>
-                        {typeLabels[session.session_type] || session.session_type}
-                      </span>
-                    </td>
-                    <td>{credits(session.seat_fee_credits)}</td>
-                    <td className="places-cell">
-                      <strong>{session.places_remaining}</strong>
-                      <span> of {session.room_capacity}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SessionCatalogue sessions={sessions} />
         ) : null}
       </section>
 
       <section className="policy-grid">
-        <div className="policy-section">
-          <h2>Fee schedule</h2>
+        <details className="policy-section">
+          <summary>Fee schedule</summary>
           <table>
             <thead>
               <tr>
@@ -174,10 +102,10 @@ export default async function PublicSessions() {
               ))}
             </tbody>
           </table>
-        </div>
+        </details>
 
-        <div className="policy-section">
-          <h2>Booking and refunds</h2>
+        <details className="policy-section">
+          <summary>Booking and refunds</summary>
           <ul>
             <li>Coaches must book rooms at least 48 hours before a session starts.</li>
             <li>Coach room refunds: 96h+ 100%, 48-96h 50%, 24-48h 25%, under 24h 0%.</li>
@@ -186,7 +114,7 @@ export default async function PublicSessions() {
             <li>One room holds one session at a time; nobody may have overlapping commitments.</li>
             <li>Room capacity counts participants only. A coach cannot enrol in their own session.</li>
           </ul>
-        </div>
+        </details>
       </section>
     </main>
   );

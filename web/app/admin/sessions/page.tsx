@@ -28,6 +28,7 @@ type Session = {
   places_remaining: number;
 };
 type Me = { kind: string };
+type AdminCalendarView = 'schedule' | 'create';
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
@@ -54,6 +55,7 @@ export default function AdminSessions() {
   const [people, setPeople] = useState<Person[]>([]);
   const [authorized, setAuthorized] = useState(false);
   const [error, setError] = useState('');
+  const [view, setView] = useState<AdminCalendarView>('schedule');
 
   const [date, setDate] = useState('');
   const [startTime, setStartTime] = useState('');
@@ -143,6 +145,7 @@ export default function AdminSessions() {
         throw new Error(body.error || 'Could not create session.');
       }
       await loadSessions();
+      setView('schedule');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create session.');
     }
@@ -161,6 +164,26 @@ export default function AdminSessions() {
 
       {error ? <p className="state error">{error}</p> : null}
 
+      <nav className="view-tabs" aria-label="Session calendar sections">
+        <button
+          className={view === 'schedule' ? 'active' : undefined}
+          type="button"
+          aria-pressed={view === 'schedule'}
+          onClick={() => setView('schedule')}
+        >
+          Weekly schedule
+        </button>
+        <button
+          className={view === 'create' ? 'active' : undefined}
+          type="button"
+          aria-pressed={view === 'create'}
+          onClick={() => setView('create')}
+        >
+          Create session
+        </button>
+      </nav>
+
+      {view === 'schedule' ? <section className="panel compact-panel">
       <div className="calendar-controls" aria-label="Calendar week controls">
         <button className="button-secondary" onClick={() => setWeekStartKey(addDaysToDateKey(weekStartKey, -7))}>
           Previous week
@@ -203,8 +226,9 @@ export default function AdminSessions() {
         </tbody>
       </table>
       </div>
+      </section> : null}
 
-      <section className="panel form-panel">
+      {view === 'create' ? <section className="panel form-panel">
       <h2>Create a session</h2>
       <form className="form-grid" onSubmit={onSubmit}>
         <label>
@@ -268,7 +292,7 @@ export default function AdminSessions() {
         </label>
         <div className="form-actions"><button type="submit">Create session</button></div>
       </form>
-      </section>
+      </section> : null}
     </main>
   );
 }

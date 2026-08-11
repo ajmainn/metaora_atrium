@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { centreDateKey, formatCentreDateKey, formatCentreRange } from '../calendarTime';
+import PaginationControls from '../PaginationControls';
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
@@ -33,8 +34,10 @@ type PublicSession = {
   seat_fee_credits: string;
 };
 type Dashboard = { upcoming_bookings: Booking[]; history: Booking[] };
+type ParticipantView = 'calendar' | 'upcoming' | 'available' | 'history';
 
 const typeLabels: Record<string, string> = { short: 'Short', standard: 'Standard', intensive: 'Intensive' };
+const pageSize = 10;
 
 function credits(value: string | number) {
   return `${Number(value).toFixed(0)} credits`;
@@ -57,6 +60,8 @@ export default function ParticipantDashboard() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [view, setView] = useState<ParticipantView>('calendar');
+  const [page, setPage] = useState(0);
 
   async function loadData() {
     setError('');
@@ -106,6 +111,7 @@ export default function ParticipantDashboard() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || fallback);
       }
+      setPage(0);
       await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : fallback);
@@ -123,6 +129,15 @@ export default function ParticipantDashboard() {
   const calendarDays = Object.entries(groupBookingsByDate(dashboard.upcoming_bookings)).sort(
     ([left], [right]) => left.localeCompare(right)
   );
+  const visibleCalendarDays = calendarDays.slice(page * 5, (page + 1) * 5);
+  const visibleUpcoming = dashboard.upcoming_bookings.slice(page * pageSize, (page + 1) * pageSize);
+  const visibleAvailable = availableSessions.slice(page * pageSize, (page + 1) * pageSize);
+  const visibleHistory = dashboard.history.slice(page * pageSize, (page + 1) * pageSize);
+
+  function selectView(nextView: ParticipantView) {
+    setView(nextView);
+    setPage(0);
+  }
 
   return (
     <main className="dashboard-page">
@@ -141,11 +156,30 @@ export default function ParticipantDashboard() {
         <article className="stat-card"><span>Available sessions</span><strong>{availableSessions.length}</strong></article>
       </section>
 
-      <section className="panel">
+      <nav className="view-tabs" aria-label="Participant dashboard sections">
+        {([
+          ['calendar', 'Calendar'],
+          ['upcoming', 'Upcoming'],
+          ['available', 'Available'],
+          ['history', 'History']
+        ] as const).map(([value, label]) => (
+          <button
+            className={view === value ? 'active' : undefined}
+            type="button"
+            aria-pressed={view === value}
+            onClick={() => selectView(value)}
+            key={value}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {view === 'calendar' ? <section className="panel">
         <h2>My calendar</h2>
         {calendarDays.length === 0 ? <p className="state">No active bookings on your calendar.</p> : (
           <div className="calendar-list">
-            {calendarDays.map(([day, bookings]) => (
+            {visibleCalendarDays.map(([day, bookings]) => (
               <article className="calendar-day" key={day}>
                 <h3>{formatCentreDateKey(day)}</h3>
                 {bookings.map((booking) => (
@@ -160,16 +194,17 @@ export default function ParticipantDashboard() {
             ))}
           </div>
         )}
-      </section>
+        <PaginationControls page={page} pageSize={5} totalItems={calendarDays.length} onPageChange={setPage} />
+      </section> : null}
 
-      <section className="panel">
+      {view === 'upcoming' ? <section className="panel">
         <h2>Upcoming bookings</h2>
         {dashboard.upcoming_bookings.length === 0 ? <p className="state">No upcoming bookings.</p> : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>Session</th><th>When</th><th>Room</th><th>Paid</th><th></th></tr></thead>
               <tbody>
-                {dashboard.upcoming_bookings.map((booking) => (
+                {visibleUpcoming.map((booking) => (
                   <tr key={booking.enrolment_id}>
                     <td>{booking.discipline} ({typeLabels[booking.session_type] || booking.session_type})</td>
                     <td>{formatCentreRange(booking.starts_at, booking.ends_at)}</td>
@@ -189,16 +224,17 @@ export default function ParticipantDashboard() {
             </table>
           </div>
         )}
-      </section>
+        <PaginationControls page={page} pageSize={pageSize} totalItems={dashboard.upcoming_bookings.length} onPageChange={setPage} />
+      </section> : null}
 
-      <section className="panel">
+      {view === 'available' ? <section className="panel">
         <h2>Available sessions</h2>
         {availableSessions.length === 0 ? <p className="state">No available sessions in the next 14 days.</p> : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>Session</th><th>When</th><th>Room</th><th>Fee</th><th>Places</th><th></th></tr></thead>
               <tbody>
-                {availableSessions.map((session) => (
+                {visibleAvailable.map((session) => (
                   <tr key={session.id}>
                     <td>{session.discipline} ({typeLabels[session.session_type] || session.session_type})</td>
                     <td>{formatCentreRange(session.starts_at, session.ends_at)}</td>
@@ -216,16 +252,17 @@ export default function ParticipantDashboard() {
             </table>
           </div>
         )}
-      </section>
+        <PaginationControls page={page} pageSize={pageSize} totalItems={availableSessions.length} onPageChange={setPage} />
+      </section> : null}
 
-      <section className="panel">
+      {view === 'history' ? <section className="panel">
         <h2>Past and cancelled bookings</h2>
         {dashboard.history.length === 0 ? <p className="state">No past or cancelled bookings.</p> : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>Session</th><th>When</th><th>Status</th><th>Paid</th><th>Refunded</th></tr></thead>
               <tbody>
-                {dashboard.history.map((booking) => (
+                {visibleHistory.map((booking) => (
                   <tr key={booking.enrolment_id}>
                     <td>{booking.discipline}</td>
                     <td>{formatCentreRange(booking.starts_at, booking.ends_at)}</td>
@@ -238,7 +275,8 @@ export default function ParticipantDashboard() {
             </table>
           </div>
         )}
-      </section>
+        <PaginationControls page={page} pageSize={pageSize} totalItems={dashboard.history.length} onPageChange={setPage} />
+      </section> : null}
     </main>
   );
 }

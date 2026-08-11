@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { centreDateKey, formatCentreDateKey, formatCentreRange } from '../calendarTime';
+import PaginationControls from '../PaginationControls';
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
@@ -42,8 +43,10 @@ type BusySession = {
   ends_at: string;
 };
 type Dashboard = { own_sessions: OwnSession[]; attending: AttendingSession[]; busy: BusySession[] };
+type CoachView = 'calendar' | 'teaching' | 'attending' | 'busy';
 
 const typeLabels: Record<string, string> = { short: 'Short', standard: 'Standard', intensive: 'Intensive' };
+const pageSize = 10;
 
 function credits(value: string | number) {
   return `${Number(value).toFixed(0)} credits`;
@@ -110,6 +113,8 @@ export default function CoachDashboard() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [view, setView] = useState<CoachView>('calendar');
+  const [page, setPage] = useState(0);
 
   async function loadData() {
     setError('');
@@ -155,6 +160,7 @@ export default function CoachDashboard() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || 'Could not cancel session');
       }
+      setPage(0);
       await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not cancel session');
@@ -167,6 +173,15 @@ export default function CoachDashboard() {
   const calendarDays = Object.entries(groupCalendarItems(coachCalendarItems(dashboard))).sort(
     ([left], [right]) => left.localeCompare(right)
   );
+  const visibleCalendarDays = calendarDays.slice(page * 5, (page + 1) * 5);
+  const visibleOwnSessions = dashboard.own_sessions.slice(page * pageSize, (page + 1) * pageSize);
+  const visibleAttending = dashboard.attending.slice(page * pageSize, (page + 1) * pageSize);
+  const visibleBusy = dashboard.busy.slice(page * pageSize, (page + 1) * pageSize);
+
+  function selectView(nextView: CoachView) {
+    setView(nextView);
+    setPage(0);
+  }
 
   return (
     <main className="dashboard-page">
@@ -185,11 +200,30 @@ export default function CoachDashboard() {
         <article className="stat-card"><span>Sessions attending</span><strong>{dashboard.attending.length}</strong></article>
       </section>
 
-      <section className="panel">
+      <nav className="view-tabs" aria-label="Coach dashboard sections">
+        {([
+          ['calendar', 'Calendar'],
+          ['teaching', 'Teaching'],
+          ['attending', 'Attending'],
+          ['busy', 'Busy periods']
+        ] as const).map(([value, label]) => (
+          <button
+            className={view === value ? 'active' : undefined}
+            type="button"
+            aria-pressed={view === value}
+            onClick={() => selectView(value)}
+            key={value}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {view === 'calendar' ? <section className="panel">
         <h2>Calendar</h2>
         {calendarDays.length === 0 ? <p className="state">No active calendar entries.</p> : (
           <div className="calendar-list">
-            {calendarDays.map(([day, items]) => (
+            {visibleCalendarDays.map(([day, items]) => (
               <article className="calendar-day" key={day}>
                 <h3>{formatCentreDateKey(day)}</h3>
                 {items.map((item) => (
@@ -204,13 +238,14 @@ export default function CoachDashboard() {
             ))}
           </div>
         )}
-      </section>
+        <PaginationControls page={page} pageSize={5} totalItems={calendarDays.length} onPageChange={setPage} />
+      </section> : null}
 
-      <section className="panel">
+      {view === 'teaching' ? <section className="panel">
         <h2>My upcoming sessions</h2>
         {dashboard.own_sessions.length === 0 ? <p className="state">No upcoming sessions.</p> : (
           <div className="session-list">
-            {dashboard.own_sessions.map((session) => (
+            {visibleOwnSessions.map((session) => (
               <article className="session-card" key={session.id}>
                 <div className="session-card-head">
                   <div>
@@ -247,16 +282,17 @@ export default function CoachDashboard() {
             ))}
           </div>
         )}
-      </section>
+        <PaginationControls page={page} pageSize={pageSize} totalItems={dashboard.own_sessions.length} onPageChange={setPage} />
+      </section> : null}
 
-      <section className="panel">
+      {view === 'attending' ? <section className="panel">
         <h2>Sessions I am attending</h2>
         {dashboard.attending.length === 0 ? <p className="state">You are not attending any upcoming sessions.</p> : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>Session</th><th>Coach</th><th>When</th><th>Room</th><th>Paid</th></tr></thead>
               <tbody>
-                {dashboard.attending.map((session) => (
+                {visibleAttending.map((session) => (
                   <tr key={session.enrolment_id}>
                     <td>{session.discipline} ({typeLabels[session.session_type] || session.session_type})</td>
                     <td>{session.coach_name}</td>
@@ -269,16 +305,17 @@ export default function CoachDashboard() {
             </table>
           </div>
         )}
-      </section>
+        <PaginationControls page={page} pageSize={pageSize} totalItems={dashboard.attending.length} onPageChange={setPage} />
+      </section> : null}
 
-      <section className="panel">
+      {view === 'busy' ? <section className="panel">
         <h2>Other coach busy periods</h2>
         {dashboard.busy.length === 0 ? <p className="state">No other scheduled coach sessions.</p> : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>Busy period</th></tr></thead>
               <tbody>
-                {dashboard.busy.map((session, index) => (
+                {visibleBusy.map((session, index) => (
                   <tr key={`${session.starts_at}-${session.ends_at}-${index}`}>
                     <td>{formatCentreRange(session.starts_at, session.ends_at)}</td>
                   </tr>
@@ -287,7 +324,8 @@ export default function CoachDashboard() {
             </table>
           </div>
         )}
-      </section>
+        <PaginationControls page={page} pageSize={pageSize} totalItems={dashboard.busy.length} onPageChange={setPage} />
+      </section> : null}
     </main>
   );
 }

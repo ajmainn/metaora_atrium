@@ -311,6 +311,20 @@ tbody tr:last-child td {
   padding-top: 18px;
 }
 
+.policy-section summary {
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 750;
+  list-style-position: outside;
+  margin-left: 18px;
+  min-height: 42px;
+  padding: 6px 0;
+}
+
+.policy-section[open] summary {
+  margin-bottom: 12px;
+}
+
 .policy-section table + table {
   margin-top: 16px;
 }
@@ -414,6 +428,56 @@ button:disabled {
 .quick-actions {
   border-top: 1px solid var(--border);
   padding-top: 22px;
+}
+
+.view-tabs {
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 4px;
+  margin-top: 26px;
+  overflow-x: auto;
+  padding-bottom: 0;
+}
+
+.view-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+
+.view-tabs button:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.view-tabs button.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.pagination {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.pagination span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 90px;
+  text-align: center;
+}
+
+.compact-panel {
+  margin-top: 20px;
 }
 
 .session-list,
@@ -727,5 +791,20 @@ select:hover {
   th,
   td {
     padding: 10px 11px;
+  }
+
+  .view-tabs button {
+    padding-left: 11px;
+    padding-right: 11px;
+  }
+
+  .pagination {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pagination span {
+    grid-column: 1 / -1;
+    grid-row: 1;
   }
 }
