@@ -8,8 +8,8 @@ export const SESSION_COOKIE = 'atrium_session';
 const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 12;
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, keylen: 64 };
 
-type PersonKind = 'participant' | 'coach' | 'admin';
-type AuthedPerson = {
+export type PersonKind = 'participant' | 'coach' | 'admin';
+export type AuthedPerson = {
   id: number;
   email: string;
   full_name: string;

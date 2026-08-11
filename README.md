@@ -15,6 +15,13 @@ Development logins are `admin@atrium.local` / `admin`, `oscar.lindqvist@atrium.l
 
 Run `npm test` for API tests and `npm run build` for both production builds.
 
+The assistant endpoint is `POST /api/assistant`. It uses the same signed session
+cookie as the rest of the API; anonymous calls are allowed, and authenticated
+role/person identity is derived only from that cookie. `ASSISTANT_PROVIDER=stub`
+or `ASSISTANT_USE_STUB=true` keeps tests and local setup deterministic. For an
+Ollama-compatible model, set `ASSISTANT_PROVIDER=ollama`,
+`ASSISTANT_BASE_URL`, `ASSISTANT_MODEL`, and optionally `ASSISTANT_API_KEY`.
+
 Visitors can book from the public catalogue with only an email address. If the address is new, Atrium creates one active participant account with the required 4000 starting credits, books the selected session through the normal participant booking transaction, and sends a password setup link to that address. Existing emails reuse the existing account, so no duplicate account or second starting-credit grant is created; pending participant accounts that still have no password receive a fresh setup link after a successful booking.
 
 Password setup links use 32 bytes of random token material, expire after 24 hours, and are single-use. Only a SHA-256 token digest is stored in `password_setup_token`; the password itself is saved with the same scrypt hashing used by normal login. `WEB_BASE_URL` controls the link host and the included `.env` already sets it to `http://localhost:3000`.
@@ -45,4 +52,7 @@ Session creation, session rescheduling, signed-in booking, anonymous visitor boo
 
 The centre timezone is New York, cancelled sessions and enrolments do not consume capacity, participant capacity excludes the coach, and half-open time ranges permit one commitment to end exactly when another begins. If these assumptions change, conflict and scheduler windows must change with them.
 
-The AI assistant and attendance/check-in workflow are unfinished. These were left out to finish and validate the existing booking, rescheduling, cancellation, access, calendar, email, scheduler, and visitor account setup paths first.
+The assistant currently has its secure foundation only: one endpoint, role-aware
+context, permission-filtered read-only data tools, and a provider abstraction.
+Booking, cancellation, rescheduling and account creation through the assistant
+remain unfinished. The attendance/check-in workflow is also unfinished.
