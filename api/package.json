@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test test/auth.test.ts test/credits.test.ts test/sessionAccess.test.ts test/sessionCancellation.test.ts test/sessionCreation.test.ts test/sessionEnrolment.test.ts test/sessionEnrolmentCancellation.test.ts test/passwordSetup.test.ts test/emailNotifications.test.ts test/scheduledEmails.test.ts test/calendarTime.test.ts test/checkInIntegrity.test.ts"
+    "test": "node --import tsx --test test/auth.test.ts test/credits.test.ts test/sessionAccess.test.ts test/sessionCancellation.test.ts test/sessionCreation.test.ts test/sessionReschedule.test.ts test/sessionEnrolment.test.ts test/sessionEnrolmentCancellation.test.ts test/passwordSetup.test.ts test/emailNotifications.test.ts test/scheduledEmails.test.ts test/calendarTime.test.ts test/checkInIntegrity.test.ts"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

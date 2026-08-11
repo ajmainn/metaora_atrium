@@ -20,6 +20,16 @@ export type AffectedParticipant = {
   refund: number;
 };
 
+export type RescheduledSessionSnapshot = {
+  id: number;
+  room_id: number;
+  coach_id: number;
+  discipline: string;
+  session_type: string;
+  starts_at: string | Date;
+  ends_at: string | Date;
+};
+
 const centreTimeZone = process.env.CENTRE_TIMEZONE || 'America/New_York';
 type QueryFn = <T extends QueryResultRow = any>(text: string, params?: unknown[]) => Promise<T[]>;
 
@@ -148,6 +158,73 @@ export async function notifyCoachCancelledSession(
         to: participant.email,
         subject: `Atrium session cancelled: ${session.discipline}`,
         text: `${sessionLine(session)} was cancelled by the coach. You have been refunded ${participant.refund} credits.`
+      },
+      sender
+    );
+  }
+}
+
+export async function notifySessionRescheduled(
+  sessionId: number,
+  oldSession: RescheduledSessionSnapshot,
+  newSession: RescheduledSessionSnapshot,
+  activeEnrolmentIds: number[],
+  sender?: MailSender,
+  queryFn: QueryFn = query
+) {
+  const snapshotDetails = async (snapshot: RescheduledSessionSnapshot) =>
+    queryFn<SessionMailDetails>(
+    `select $1::int as id, $2::text as discipline, $3::text as session_type,
+            $4::timestamptz as starts_at, $5::timestamptz as ends_at,
+            r.name as room_name, c.full_name as coach_name, c.email as coach_email
+       from room r
+       join person c on c.id = $7
+      where r.id = $6`,
+    [
+      snapshot.id,
+      snapshot.discipline,
+      snapshot.session_type,
+      snapshot.starts_at,
+      snapshot.ends_at,
+      snapshot.room_id,
+      snapshot.coach_id
+    ]
+  );
+
+  const [previous, nextSession] = await Promise.all([
+    snapshotDetails(oldSession).then((rows) => rows[0]),
+    snapshotDetails(newSession).then((rows) => rows[0])
+  ]);
+  if (!previous || !nextSession) return;
+
+  const changeText = `Old: ${sessionLine(previous)}.\nNew: ${sessionLine(nextSession)}.`;
+
+  await sendMailSafely(
+    {
+      to: await adminEmails(queryFn),
+      subject: `Atrium session rescheduled: ${nextSession.discipline}`,
+      text: `${nextSession.coach_name} rescheduled a session.\n\n${changeText}`
+    },
+    sender
+  );
+
+  if (activeEnrolmentIds.length === 0) return;
+
+  const participants = await queryFn<{ email: string; full_name: string }>(
+    `select distinct p.email, p.full_name
+       from enrolment e
+       join person p on p.id = e.person_id
+      where e.id = any($1::int[])
+      order by p.email`,
+    [activeEnrolmentIds]
+  );
+
+  for (const participant of participants) {
+    await sendMailSafely(
+      {
+        to: participant.email,
+        subject: `Atrium session rescheduled: ${nextSession.discipline}`,
+        text: `${participant.full_name}, your Atrium session has changed.\n\n${changeText}`
       },
       sender
     );

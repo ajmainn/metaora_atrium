@@ -4,6 +4,7 @@ import { requireRole, requireSession } from '../auth';
 import { applyCoachCancellation } from '../sessionCancellation';
 import { createSessionBooking, SessionCreationError } from '../sessionCreation';
 import { cancelOwnEnrolment, enrolInSession, SessionEnrolmentError } from '../sessionEnrolment';
+import { rescheduleSession, SessionRescheduleError } from '../sessionReschedule';
 import {
   bookSessionAsAnonymousVisitor,
   sendPasswordSetupEmail,
@@ -13,6 +14,7 @@ import {
   notifyCoachCancelledSession,
   notifyParticipantBooked,
   notifyParticipantCancelled,
+  notifySessionRescheduled,
   notifySessionCreated
 } from '../emailNotifications';
 
@@ -145,7 +147,7 @@ router.get('/dashboard', requireSession, async (_req, res) => {
 
     if (person.kind === 'coach') {
       const ownSessions = await query(
-        `select s.id, s.discipline, s.session_type, s.status, s.starts_at, s.ends_at,
+        `select s.id, s.room_id, s.discipline, s.session_type, s.status, s.starts_at, s.ends_at,
                 s.seat_fee_credits, r.name as room_name,
                 count(e.id)::int as enrolled_count
            from session s
@@ -372,6 +374,44 @@ router.patch('/:id', requireSession, requireRole('admin', 'coach'), async (req, 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'could not update the session' });
+  }
+});
+
+router.post('/:id/reschedule', requireSession, requireRole('admin', 'coach'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(404).json({ error: 'no such session' });
+      return;
+    }
+
+    const result = await withTransaction(
+      (client) => rescheduleSession(client, id, res.locals.person, req.body || {}),
+      { isolationLevel: 'serializable' }
+    );
+
+    await notifyAfterSuccess('session rescheduled', () =>
+      notifySessionRescheduled(id, result.oldSession, result.session, result.activeEnrolmentIds)
+    );
+
+    res.json({
+      session: result.session,
+      changed: result.changed,
+      credit_adjustments: result.creditAdjustments
+    });
+  } catch (err) {
+    if (err instanceof SessionRescheduleError || err instanceof SessionCreationError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+
+    if ((err as { code?: string }).code === '40001') {
+      res.status(409).json({ error: 'reschedule conflict, please retry' });
+      return;
+    }
+
+    console.error(err);
+    res.status(500).json({ error: 'could not reschedule the session' });
   }
 });
 

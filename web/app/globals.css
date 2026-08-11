@@ -537,6 +537,22 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.reschedule-panel {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+  margin: 12px 0 16px;
+  padding-top: 16px;
+}
+
 .calendar-item {
   align-items: center;
   border-top: 1px solid #e9ece9;
@@ -727,6 +743,14 @@ select:hover {
   .session-card-head button {
     margin-top: 12px;
     width: 100%;
+  }
+
+  .button-row {
+    justify-content: stretch;
+  }
+
+  .reschedule-panel {
+    grid-template-columns: 1fr;
   }
 
   .calendar-item {

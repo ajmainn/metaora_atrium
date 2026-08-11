@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { centreDateKey, formatCentreDateKey, formatCentreRange } from '../calendarTime';
+import { centreDateKey, centreLocalDateTimeToIso, formatCentreDateKey, formatCentreRange } from '../calendarTime';
 import PaginationControls from '../PaginationControls';
 
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
 type Person = { full_name: string; email: string; kind: string; credits: string };
+type Room = { id: number; name: string; capacity: number };
 type Attendee = {
   enrolment_id: number;
   status: string;
@@ -18,6 +19,7 @@ type Attendee = {
 };
 type OwnSession = {
   id: number;
+  room_id: number;
   discipline: string;
   session_type: string;
   status: string;
@@ -44,12 +46,34 @@ type BusySession = {
 };
 type Dashboard = { own_sessions: OwnSession[]; attending: AttendingSession[]; busy: BusySession[] };
 type CoachView = 'calendar' | 'teaching' | 'attending' | 'busy';
+type RescheduleDraft = { date: string; startTime: string; endTime: string; roomId: string; sessionType: string };
 
 const typeLabels: Record<string, string> = { short: 'Short', standard: 'Standard', intensive: 'Intensive' };
 const pageSize = 10;
 
 function credits(value: string | number) {
   return `${Number(value).toFixed(0)} credits`;
+}
+
+function centreInputTime(value: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(new Date(value));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || '00';
+  return `${get('hour')}:${get('minute')}`;
+}
+
+function draftFor(session: OwnSession): RescheduleDraft {
+  return {
+    date: centreDateKey(session.starts_at),
+    startTime: centreInputTime(session.starts_at),
+    endTime: centreInputTime(session.ends_at),
+    roomId: String(session.room_id),
+    sessionType: session.session_type
+  };
 }
 
 type CalendarItem = {
@@ -110,17 +134,21 @@ export default function CoachDashboard() {
   const router = useRouter();
   const [person, setPerson] = useState<Person | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [view, setView] = useState<CoachView>('calendar');
   const [page, setPage] = useState(0);
+  const [reschedulingId, setReschedulingId] = useState<number | null>(null);
+  const [drafts, setDrafts] = useState<Record<number, RescheduleDraft>>({});
 
   async function loadData() {
     setError('');
-    const [meRes, dashboardRes] = await Promise.all([
+    const [meRes, dashboardRes, roomsRes] = await Promise.all([
       fetch(`${apiBaseUrl}/api/me`, { credentials: 'include' }),
-      fetch(`${apiBaseUrl}/api/sessions/dashboard`, { credentials: 'include' })
+      fetch(`${apiBaseUrl}/api/sessions/dashboard`, { credentials: 'include' }),
+      fetch(`${apiBaseUrl}/api/rooms`, { credentials: 'include' })
     ]);
 
     if (!meRes.ok) {
@@ -137,6 +165,8 @@ export default function CoachDashboard() {
     if (!dashboardRes.ok) {
       throw new Error('Could not load dashboard');
     }
+
+    if (roomsRes.ok) setRooms(await roomsRes.json());
 
     setPerson(me);
     setDashboard(await dashboardRes.json());
@@ -164,6 +194,41 @@ export default function CoachDashboard() {
       await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not cancel session');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startReschedule(session: OwnSession) {
+    setError('');
+    setReschedulingId(session.id);
+    setDrafts((current) => ({ ...current, [session.id]: current[session.id] || draftFor(session) }));
+  }
+
+  async function rescheduleSession(session: OwnSession) {
+    const draft = drafts[session.id] || draftFor(session);
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/sessions/${session.id}/reschedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          room_id: Number(draft.roomId),
+          session_type: draft.sessionType,
+          starts_at: centreLocalDateTimeToIso(draft.date, draft.startTime),
+          ends_at: centreLocalDateTimeToIso(draft.date, draft.endTime)
+        })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Could not reschedule session');
+      }
+      setReschedulingId(null);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reschedule session');
     } finally {
       setBusy(false);
     }
@@ -256,9 +321,92 @@ export default function CoachDashboard() {
                     <p>{session.enrolled_count} attendee{session.enrolled_count === 1 ? '' : 's'}</p>
                   </div>
                   {session.status === 'scheduled' ? (
-                    <button disabled={busy} onClick={() => cancelSession(session.id)}>Cancel session</button>
+                    <div className="button-row">
+                      <button className="button-secondary" disabled={busy} onClick={() => startReschedule(session)}>Reschedule</button>
+                      <button disabled={busy} onClick={() => cancelSession(session.id)}>Cancel session</button>
+                    </div>
                   ) : null}
                 </div>
+
+                {reschedulingId === session.id ? (
+                  <div className="reschedule-panel">
+                    <label>
+                      <span>Date</span>
+                      <input
+                        type="date"
+                        value={(drafts[session.id] || draftFor(session)).date}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [session.id]: { ...(current[session.id] || draftFor(session)), date: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Starts</span>
+                      <input
+                        type="time"
+                        value={(drafts[session.id] || draftFor(session)).startTime}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [session.id]: { ...(current[session.id] || draftFor(session)), startTime: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Ends</span>
+                      <input
+                        type="time"
+                        value={(drafts[session.id] || draftFor(session)).endTime}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [session.id]: { ...(current[session.id] || draftFor(session)), endTime: event.target.value }
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Type</span>
+                      <select
+                        value={(drafts[session.id] || draftFor(session)).sessionType}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [session.id]: { ...(current[session.id] || draftFor(session)), sessionType: event.target.value }
+                          }))
+                        }
+                      >
+                        {Object.entries(typeLabels).map(([value, label]) => (
+                          <option value={value} key={value}>{label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Room</span>
+                      <select
+                        value={(drafts[session.id] || draftFor(session)).roomId}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [session.id]: { ...(current[session.id] || draftFor(session)), roomId: event.target.value }
+                          }))
+                        }
+                      >
+                        {rooms.map((room) => (
+                          <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="form-actions">
+                      <button className="button-secondary" type="button" disabled={busy} onClick={() => setReschedulingId(null)}>Close</button>
+                      <button type="button" disabled={busy} onClick={() => rescheduleSession(session)}>Save changes</button>
+                    </div>
+                  </div>
+                ) : null}
 
                 {session.attendees.length === 0 ? <p className="state">No attendees yet.</p> : (
                   <div className="table-wrap">

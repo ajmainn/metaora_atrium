@@ -33,14 +33,16 @@ Accounts begin with 4000 participant credits or 2000 coach credits. Fees are: sh
 
 Coach room cancellations refund 100% with at least 96 hours' notice, 50% from 48 hours, 25% from 24 hours, and 0% below 24 hours. A coach cancellation refunds active attendees in full. Participant cancellations refund 100% with at least 48 hours' notice, 50% from 24 hours, 25% from 12 hours, and 0% below 12 hours. These tiers reward early notice while limiting losses from places unlikely to be rebooked. Cancellation after a session starts receives no refund.
 
+Rescheduling preserves the existing session and active enrolments. Only scheduled sessions that have not started may be moved. If a type change changes fees, the transaction moves balances to the new listed fee: higher room or seat fees are charged as a delta, lower fees are refunded as a delta, and active enrolment `credits_charged` is updated to the new seat fee. If any active participant or the coach cannot cover an increased fee, the whole reschedule is rejected. If an administrator reassigns a session to a different coach, the old coach receives the old room fee back and the new coach pays the new room fee in the same transaction.
+
 ## Invariants And Transactions
 
 The schema enforces valid roles, statuses, session types and durations; positive room capacity; integer and nonnegative credits; valid refund ranges; case-insensitive unique emails; one active enrolment per person/session; and one non-voided check-in per enrolment. Application transactions enforce room, coach, participant-overlap, capacity, ownership, notice, and balance rules because those checks span multiple rows or depend on the acting user.
 
-Session creation, signed-in booking, anonymous visitor booking, participant cancellation, coach cancellation, and password setup use serializable transactions. Row locks and guarded updates protect balances, capacity, token use, and duplicate-account checks. Serializable isolation prevents committed serialization anomalies, but callers must still retry a transaction rejected with a serialization failure; the current HTTP layer reports such a failure rather than retrying automatically. Login/logout use their existing single-statement/default-isolation paths.
+Session creation, session rescheduling, signed-in booking, anonymous visitor booking, participant cancellation, coach cancellation, and password setup use serializable transactions. Row locks and guarded updates protect balances, capacity, token use, and duplicate-account checks. Serializable isolation prevents committed serialization anomalies, but callers must still retry a transaction rejected with a serialization failure; the current HTTP layer reports such a failure rather than retrying automatically. Login/logout use their existing single-statement/default-isolation paths.
 
 ## Assumptions And Unfinished Work
 
 The centre timezone is New York, cancelled sessions and enrolments do not consume capacity, participant capacity excludes the coach, and half-open time ranges permit one commitment to end exactly when another begins. If these assumptions change, conflict and scheduler windows must change with them.
 
-The AI assistant, full rescheduling, and attendance/check-in workflow are unfinished. Rescheduling emails are therefore also unfinished. These were left out to finish and validate the existing booking, cancellation, access, calendar, email, scheduler, and visitor account setup paths first.
+The AI assistant and attendance/check-in workflow are unfinished. These were left out to finish and validate the existing booking, rescheduling, cancellation, access, calendar, email, scheduler, and visitor account setup paths first.

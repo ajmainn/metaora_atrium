@@ -9,7 +9,7 @@ const SESSION_DURATIONS_MS: Record<string, number> = {
   intensive: 210 * 60 * 1000
 };
 
-type CreateSessionInput = {
+export type CreateSessionInput = {
   room_id: number;
   coach_id: number;
   discipline: string;
@@ -51,7 +51,7 @@ function localParts(date: Date) {
   };
 }
 
-function assertValidInput(input: CreateSessionInput, now: Date): { startsAt: Date; endsAt: Date } {
+export function validateSessionSchedule(input: CreateSessionInput, now: Date): { startsAt: Date; endsAt: Date } {
   const startsAt = new Date(input.starts_at);
   const endsAt = new Date(input.ends_at);
 
@@ -90,7 +90,7 @@ export async function createSessionBooking(
   input: CreateSessionInput,
   now: Date = new Date()
 ) {
-  const { startsAt, endsAt } = assertValidInput(input, now);
+  const { startsAt, endsAt } = validateSessionSchedule(input, now);
   const fee = roomFee(input.session_type);
   const seat = seatFee(input.session_type);
 
