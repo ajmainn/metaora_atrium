@@ -17,10 +17,16 @@ Run `npm test` for API tests and `npm run build` for both production builds.
 
 The assistant endpoint is `POST /api/assistant`. It uses the same signed session
 cookie as the rest of the API; anonymous calls are allowed, and authenticated
-role/person identity is derived only from that cookie. `ASSISTANT_PROVIDER=stub`
-or `ASSISTANT_USE_STUB=true` keeps tests and local setup deterministic. For an
-Ollama-compatible model, set `ASSISTANT_PROVIDER=ollama`,
-`ASSISTANT_BASE_URL`, `ASSISTANT_MODEL`, and optionally `ASSISTANT_API_KEY`.
+role/person identity is derived only from that cookie. Tests use deterministic
+stub mode and do not need Ollama, internet access, or credentials:
+`ASSISTANT_PROVIDER=stub` and `ASSISTANT_USE_STUB=true`.
+
+For a real Ollama-compatible provider, set `ASSISTANT_PROVIDER=ollama`,
+`ASSISTANT_USE_STUB=false`, `ASSISTANT_BASE_URL`, `ASSISTANT_MODEL`, and
+`ASSISTANT_TIMEOUT_MS`. Local Ollama normally uses
+`ASSISTANT_BASE_URL=http://localhost:11434`; a hosted compatible endpoint uses
+that service base URL instead. Set `ASSISTANT_API_KEY` only when the provider
+requires one, and do not commit real keys.
 
 Visitors can book from the public catalogue with only an email address. If the address is new, Atrium creates one active participant account with the required 4000 starting credits, books the selected session through the normal participant booking transaction, and sends a password setup link to that address. Existing emails reuse the existing account, so no duplicate account or second starting-credit grant is created; pending participant accounts that still have no password receive a fresh setup link after a successful booking.
 
@@ -52,7 +58,7 @@ Session creation, session rescheduling, signed-in booking, anonymous visitor boo
 
 The centre timezone is New York, cancelled sessions and enrolments do not consume capacity, participant capacity excludes the coach, and half-open time ranges permit one commitment to end exactly when another begins. If these assumptions change, conflict and scheduler windows must change with them.
 
-The assistant currently has its secure foundation only: one endpoint, role-aware
-context, permission-filtered read-only data tools, and a provider abstraction.
-Booking, cancellation, rescheduling and account creation through the assistant
-remain unfinished. The attendance/check-in workflow is also unfinished.
+The assistant has one role-aware endpoint, permission-filtered tools, anonymous
+and participant actions, coach/admin cancellation and rescheduling, and a
+stub/Ollama-compatible provider switch. The attendance/check-in workflow remains
+read-only; new check-in writes are unfinished.

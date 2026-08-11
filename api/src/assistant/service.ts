@@ -2,6 +2,7 @@ import {
   AssistantActionDeps,
   AssistantActionError,
   assistantToolDescriptions,
+  allowedAssistantToolNames,
   executeAnonymousAssistantAction
 } from './actions';
 import { AssistantCallerContext, AssistantQueryFn } from './context';
@@ -17,6 +18,8 @@ export type AssistantResult = {
   role: AssistantCallerContext['role'];
   response: string;
 };
+
+const MAX_TOOL_ITERATIONS = 4;
 
 function sanitizeConversation(input: unknown): Array<{ role: 'user' | 'assistant'; content: string }> {
   if (!Array.isArray(input)) return [];
@@ -52,7 +55,10 @@ export async function runAssistant(
   actionDeps: Omit<AssistantActionDeps, 'queryFn' | 'now'> = {}
 ): Promise<AssistantResult & { data: AssistantToolData }> {
   const data = await buildAssistantToolData(caller, queryFn, now);
-  const result = await provider.complete({
+  const availableTools = assistantToolDescriptions.filter((tool) =>
+    allowedAssistantToolNames(caller).includes(tool.name)
+  );
+  const baseRequest = {
     message: input.message,
     conversation: input.conversation || [],
     caller: {
@@ -60,32 +66,31 @@ export async function runAssistant(
       authenticated: caller.authenticated
     },
     data,
-    availableTools: assistantToolDescriptions
-  });
+    availableTools
+  };
 
-  if (result.toolCall) {
+  let result = await provider.complete(baseRequest);
+  const toolResults = [];
+
+  for (let iteration = 0; result.toolCall; iteration += 1) {
+    if (iteration >= MAX_TOOL_ITERATIONS) {
+      throw new AssistantActionError(409, 'assistant tool loop limit reached');
+    }
+
     const actionResult = await executeAnonymousAssistantAction(caller, result.toolCall, {
       queryFn,
       now,
       ...actionDeps
     });
-    const final = await provider.complete({
-      message: input.message,
-      conversation: input.conversation || [],
-      caller: {
-        role: caller.role,
-        authenticated: caller.authenticated
-      },
-      data,
-      availableTools: assistantToolDescriptions,
-      toolResults: [actionResult]
+    toolResults.push(actionResult);
+    result = await provider.complete({
+      ...baseRequest,
+      toolResults
     });
+  }
 
-    return {
-      role: caller.role,
-      response: final.content || JSON.stringify(actionResult.data),
-      data
-    };
+  if (!result.content.trim()) {
+    throw new AssistantActionError(502, 'assistant returned an empty response');
   }
 
   return {

@@ -544,6 +544,17 @@ export async function executeAssistantAction(
   call: AssistantToolCall,
   deps: AssistantActionDeps
 ): Promise<AssistantActionResult> {
+  if (!call || typeof call.name !== 'string' || !call.name.trim()) {
+    throw new AssistantActionError(400, 'assistant tool name is required');
+  }
+
+  if (
+    call.arguments !== undefined &&
+    (call.arguments === null || typeof call.arguments !== 'object' || Array.isArray(call.arguments))
+  ) {
+    throw new AssistantActionError(400, 'assistant tool arguments must be an object');
+  }
+
   const name = call.name as AssistantToolName;
   const allowed = allowedAssistantToolNames(caller);
   if (!allowed.includes(name)) {

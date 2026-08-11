@@ -9,7 +9,7 @@ import {
 import { sendPasswordSetupEmail } from '../passwordSetup';
 import { AssistantActionDeps, AssistantActionError } from '../assistant/actions';
 import { AssistantAuthError, resolveAssistantCaller, AssistantQueryFn } from '../assistant/context';
-import { assistantProviderFromEnv, AssistantProvider } from '../assistant/provider';
+import { assistantProviderFromEnv, AssistantProvider, AssistantProviderError } from '../assistant/provider';
 import { parseAssistantInput, runAssistant } from '../assistant/service';
 
 export function createAssistantRouter(options: {
@@ -47,6 +47,11 @@ export function createAssistantRouter(options: {
       }
 
       if (err instanceof AssistantActionError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+
+      if (err instanceof AssistantProviderError) {
         res.status(err.status).json({ error: err.message });
         return;
       }
