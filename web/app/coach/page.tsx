@@ -175,10 +175,15 @@ export default function CoachDashboard() {
           <h1>Coach dashboard</h1>
           <p>{person.full_name} - {person.email}</p>
         </div>
-        <strong>{credits(person.credits)}</strong>
       </header>
 
       {error ? <p className="state error">{error}</p> : null}
+
+      <section className="stat-grid" aria-label="Coach summary">
+        <article className="stat-card"><span>Credit balance</span><strong>{Number(person.credits).toFixed(0)}</strong></article>
+        <article className="stat-card"><span>Sessions teaching</span><strong>{dashboard.own_sessions.length}</strong></article>
+        <article className="stat-card"><span>Sessions attending</span><strong>{dashboard.attending.length}</strong></article>
+      </section>
 
       <section className="panel">
         <h2>Calendar</h2>
@@ -189,7 +194,7 @@ export default function CoachDashboard() {
                 <h3>{formatCentreDateKey(day)}</h3>
                 {items.map((item) => (
                   <div className="calendar-item" key={item.key}>
-                    <strong>{item.title}</strong>
+                    <strong className="discipline-name">{item.title}</strong>
                     <span>{item.label}</span>
                     <span>{formatCentreRange(item.starts_at, item.ends_at)}</span>
                     <span>{item.detail}</span>
@@ -209,7 +214,9 @@ export default function CoachDashboard() {
               <article className="session-card" key={session.id}>
                 <div className="session-card-head">
                   <div>
-                    <h3>{session.discipline} ({typeLabels[session.session_type] || session.session_type})</h3>
+                    <h3><span className="discipline-name">{session.discipline}</span>{' '}
+                      <span className={`type-badge type-${session.session_type}`}>{typeLabels[session.session_type] || session.session_type}</span>
+                    </h3>
                     <p>{formatCentreRange(session.starts_at, session.ends_at)} - {session.room_name}</p>
                     <p>{session.enrolled_count} attendee{session.enrolled_count === 1 ? '' : 's'}</p>
                   </div>

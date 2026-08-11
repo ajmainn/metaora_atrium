@@ -280,3 +280,33 @@ Why:
 - Existing tests pass with `npm.cmd test`.
 - Full build passes with `npm.cmd run build`.
 - Migration verification passed on current database and a temporary fresh database.
+
+## Shared Web UI and Authenticated Navigation
+
+- Added `web/app/SiteHeader.tsx` and updated `web/app/layout.tsx`.
+  - Resolves the signed-in user through the existing `/api/me` session flow.
+  - Shows role-aware navigation, active-page state, role, name, and email.
+  - Hides Log in after authentication and provides a working Log out action through the existing endpoint.
+
+- Updated `web/app/globals.css`.
+  - Added a shared lightweight visual system for page widths, spacing, typography, borders, shadows, buttons, forms, alerts, tables, cards, and focus states.
+  - Added responsive header, stat-card, form, table, and calendar behavior for desktop, tablet, and 375px mobile layouts.
+
+- Updated `web/app/page.tsx` and `web/app/login/page.tsx`.
+  - Improved catalogue table readability, discipline formatting, session-type badges, and places-remaining emphasis.
+  - Improved login form states, required fields, autocomplete attributes, and submission feedback.
+
+- Updated the admin, coach, and participant pages.
+  - Replaced the admin summary table with stat cards and an existing-route quick action.
+  - Added consistent stat summaries and session presentation to coach and participant dashboards.
+  - Styled the admin weekly calendar with compact event blocks, room/capacity details, week controls, and current-day highlighting.
+
+Why:
+- A shared header prevents authenticated users from seeing irrelevant admin links or a stale Log in action.
+- Consistent components make existing booking and dashboard workflows easier to scan without changing API behavior or business rules.
+- Contained table/calendar scrolling, stacked mobile layouts, visible focus states, and larger touch targets keep the existing UI usable and accessible at narrow widths.
+- Browser checks at desktop and 375px confirmed that pages do not introduce document-level horizontal overflow; the weekly calendar intentionally scrolls inside its container.
+
+Verification:
+- All 62 API tests pass with `npm.cmd test`.
+- API TypeScript and Next.js production builds pass with `npm.cmd run build`.

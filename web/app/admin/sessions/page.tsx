@@ -64,6 +64,7 @@ export default function AdminSessions() {
   const [coachId, setCoachId] = useState('');
 
   const days = [0, 1, 2, 3, 4, 5, 6].map((offset) => addDaysToDateKey(weekStartKey, offset));
+  const todayKey = centreDateKey(new Date());
 
   async function loadSessions() {
     if (!authorized) return;
@@ -150,26 +151,33 @@ export default function AdminSessions() {
   if (!authorized) return <main><p className="state">Loading...</p></main>;
 
   return (
-    <main>
-      <h1>Session calendar</h1>
+    <main className="dashboard-page">
+      <header className="dashboard-header">
+        <div>
+          <h1>Session calendar</h1>
+          <p>Weekly schedule in New York time</p>
+        </div>
+      </header>
 
       {error ? <p className="state error">{error}</p> : null}
 
-      <p>
-        <button onClick={() => setWeekStartKey(addDaysToDateKey(weekStartKey, -7))}>
+      <div className="calendar-controls" aria-label="Calendar week controls">
+        <button className="button-secondary" onClick={() => setWeekStartKey(addDaysToDateKey(weekStartKey, -7))}>
           Previous week
-        </button>{' '}
-        <button onClick={() => setWeekStartKey(addDaysToDateKey(weekStartKey, 7))}>
+        </button>
+        <strong>{formatCentreDateKey(weekStartKey)} - {formatCentreDateKey(days[6])}</strong>
+        <button className="button-secondary" onClick={() => setWeekStartKey(addDaysToDateKey(weekStartKey, 7))}>
           Next week
         </button>
-      </p>
+      </div>
 
+      <div className="calendar-scroll" tabIndex={0} aria-label="Weekly session calendar">
       <table className="calendar">
         <thead>
           <tr>
             <th className="hour"></th>
             {days.map((day) => (
-              <th key={day}>
+              <th className={day === todayKey ? 'current-day' : undefined} key={day}>
                 {formatCentreDateKey(day)}
               </th>
             ))}
@@ -180,11 +188,12 @@ export default function AdminSessions() {
             <tr key={hour}>
               <th className="hour">{hour}:00</th>
               {days.map((day) => (
-                <td key={day}>
+                <td className={day === todayKey ? 'current-day' : undefined} key={day}>
                   {sessionsFor(day, hour).map((session) => (
                     <div className="entry" key={session.id}>
-                      {session.discipline} - {session.room_name} ({session.enrolled_count}/
-                      {session.room_capacity})
+                      <strong>{session.discipline}</strong>
+                      <span>{session.room_name}</span>
+                      <small>{session.enrolled_count} / {session.room_capacity} places</small>
                     </div>
                   ))}
                 </td>
@@ -193,12 +202,14 @@ export default function AdminSessions() {
           ))}
         </tbody>
       </table>
+      </div>
 
+      <section className="panel form-panel">
       <h2>Create a session</h2>
-      <form onSubmit={onSubmit}>
+      <form className="form-grid" onSubmit={onSubmit}>
         <label>
           <span>Date</span>
-          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
         </label>
         <label>
           <span>Starts</span>
@@ -206,11 +217,12 @@ export default function AdminSessions() {
             type="time"
             value={startTime}
             onChange={(event) => setStartTime(event.target.value)}
+            required
           />
         </label>
         <label>
           <span>Ends</span>
-          <input type="time" value={endTime} onChange={(event) => setEndTime(event.target.value)} />
+          <input type="time" value={endTime} onChange={(event) => setEndTime(event.target.value)} required />
         </label>
         <label>
           <span>Discipline</span>
@@ -234,8 +246,8 @@ export default function AdminSessions() {
         </label>
         <label>
           <span>Room</span>
-          <select value={roomId} onChange={(event) => setRoomId(event.target.value)}>
-            <option value=""></option>
+          <select value={roomId} onChange={(event) => setRoomId(event.target.value)} required>
+            <option value="">Select a room</option>
             {rooms.map((room) => (
               <option key={room.id} value={room.id}>
                 {room.name}
@@ -245,8 +257,8 @@ export default function AdminSessions() {
         </label>
         <label>
           <span>Coach</span>
-          <select value={coachId} onChange={(event) => setCoachId(event.target.value)}>
-            <option value=""></option>
+          <select value={coachId} onChange={(event) => setCoachId(event.target.value)} required>
+            <option value="">Select a coach</option>
             {people.map((person) => (
               <option key={person.id} value={person.id}>
                 {person.full_name}
@@ -254,8 +266,9 @@ export default function AdminSessions() {
             ))}
           </select>
         </label>
-        <button type="submit">Create</button>
+        <div className="form-actions"><button type="submit">Create session</button></div>
       </form>
+      </section>
     </main>
   );
 }

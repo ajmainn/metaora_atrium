@@ -62,27 +62,22 @@ export default function AdminDashboard() {
   if (!authorized) return <main><p className="state">Loading...</p></main>;
 
   return (
-    <main>
-      <h1>Dashboard</h1>
-      <table className="counts">
-        <thead>
-          <tr>
-            <th>Rooms</th>
-            <th>Sessions this week</th>
-            <th>People</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>{rooms.length}</td>
-            <td>{sessions.length}</td>
-            <td>{people.length}</td>
-          </tr>
-        </tbody>
-      </table>
-      <p>
-        <a href="/admin/sessions">Session calendar</a>
-      </p>
+    <main className="dashboard-page">
+      <header className="dashboard-header">
+        <div>
+          <h1>Admin dashboard</h1>
+          <p>Centre overview for the current week</p>
+        </div>
+      </header>
+      <section className="stat-grid" aria-label="Centre summary">
+        <article className="stat-card"><span>Rooms</span><strong>{rooms.length}</strong></article>
+        <article className="stat-card"><span>Sessions this week</span><strong>{sessions.length}</strong></article>
+        <article className="stat-card"><span>People</span><strong>{people.length}</strong></article>
+      </section>
+      <section className="panel quick-actions">
+        <h2>Quick actions</h2>
+        <a className="button-link" href="/admin/sessions">Open session calendar</a>
+      </section>
     </main>
   );
 }

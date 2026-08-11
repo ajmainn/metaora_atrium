@@ -89,15 +89,20 @@ export default async function PublicSessions() {
         </p>
       </section>
 
-      <section>
-        <h2>Upcoming sessions</h2>
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>Upcoming sessions</h2>
+            <p>Availability for the next 14 days</p>
+          </div>
+        </div>
         {error ? <p className="state error">{error}</p> : null}
         {!error && sessions.length === 0 ? (
           <p className="state">No sessions are available in the next 14 days.</p>
         ) : null}
         {!error && sessions.length > 0 ? (
           <div className="table-wrap">
-            <table>
+            <table className="session-table">
               <thead>
                 <tr>
                   <th>Discipline</th>
@@ -111,13 +116,18 @@ export default async function PublicSessions() {
               <tbody>
                 {sessions.map((session) => (
                   <tr key={session.id}>
-                    <td>{session.discipline}</td>
+                    <td><strong className="discipline-name">{session.discipline}</strong></td>
                     <td>{formatDate(session.starts_at)}</td>
                     <td>{formatTimeRange(session.starts_at, session.ends_at)}</td>
-                    <td>{typeLabels[session.session_type] || session.session_type}</td>
-                    <td>{credits(session.seat_fee_credits)}</td>
                     <td>
-                      {session.places_remaining} of {session.room_capacity}
+                      <span className={`type-badge type-${session.session_type}`}>
+                        {typeLabels[session.session_type] || session.session_type}
+                      </span>
+                    </td>
+                    <td>{credits(session.seat_fee_credits)}</td>
+                    <td className="places-cell">
+                      <strong>{session.places_remaining}</strong>
+                      <span> of {session.room_capacity}</span>
                     </td>
                   </tr>
                 ))}
@@ -128,7 +138,7 @@ export default async function PublicSessions() {
       </section>
 
       <section className="policy-grid">
-        <div>
+        <div className="policy-section">
           <h2>Fee schedule</h2>
           <table>
             <thead>
@@ -141,7 +151,7 @@ export default async function PublicSessions() {
             <tbody>
               {roomFees.map(([type, length, fee]) => (
                 <tr key={type}>
-                  <td>{type}</td>
+                <td><span className={`type-badge type-${type.toLowerCase()}`}>{type}</span></td>
                   <td>{length}</td>
                   <td>{fee}</td>
                 </tr>
@@ -158,7 +168,7 @@ export default async function PublicSessions() {
             <tbody>
               {seatFees.map(([type, fee]) => (
                 <tr key={type}>
-                  <td>{type}</td>
+                <td><span className={`type-badge type-${type.toLowerCase()}`}>{type}</span></td>
                   <td>{fee}</td>
                 </tr>
               ))}
@@ -166,7 +176,7 @@ export default async function PublicSessions() {
           </table>
         </div>
 
-        <div>
+        <div className="policy-section">
           <h2>Booking and refunds</h2>
           <ul>
             <li>Coaches must book rooms at least 48 hours before a session starts.</li>

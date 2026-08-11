@@ -131,10 +131,15 @@ export default function ParticipantDashboard() {
           <h1>Participant dashboard</h1>
           <p>{person.full_name} - {person.email}</p>
         </div>
-        <strong>{credits(person.credits)}</strong>
       </header>
 
       {error ? <p className="state error">{error}</p> : null}
+
+      <section className="stat-grid" aria-label="Participant summary">
+        <article className="stat-card"><span>Credit balance</span><strong>{Number(person.credits).toFixed(0)}</strong></article>
+        <article className="stat-card"><span>Upcoming bookings</span><strong>{dashboard.upcoming_bookings.length}</strong></article>
+        <article className="stat-card"><span>Available sessions</span><strong>{availableSessions.length}</strong></article>
+      </section>
 
       <section className="panel">
         <h2>My calendar</h2>
@@ -145,8 +150,8 @@ export default function ParticipantDashboard() {
                 <h3>{formatCentreDateKey(day)}</h3>
                 {bookings.map((booking) => (
                   <div className="calendar-item" key={booking.enrolment_id}>
-                    <strong>{booking.discipline}</strong>
-                    <span>{typeLabels[booking.session_type] || booking.session_type}</span>
+                    <strong className="discipline-name">{booking.discipline}</strong>
+                    <span><span className={`type-badge type-${booking.session_type}`}>{typeLabels[booking.session_type] || booking.session_type}</span></span>
                     <span>{formatCentreRange(booking.starts_at, booking.ends_at)}</span>
                     <span>{booking.room_name}</span>
                   </div>

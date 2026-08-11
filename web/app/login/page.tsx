@@ -10,28 +10,37 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setBusy(true);
+    setError('');
 
-    const res = await fetch(`${apiBaseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ email, password })
-    });
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password })
+      });
 
-    if (res.ok) {
+      if (!res.ok) throw new Error();
       const person = await res.json();
       router.push(person.dashboard);
-    } else {
+      router.refresh();
+    } catch {
       setError('Could not sign in with those details.');
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <main>
-      <h1>Log in</h1>
+    <main className="auth-page">
+      <div className="auth-panel">
+        <h1>Log in</h1>
+        <p>Use your Atrium account to open your dashboard.</p>
       <form onSubmit={onSubmit}>
         <label>
           <span>Email</span>
@@ -40,6 +49,8 @@ export default function Login() {
             name="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            autoComplete="email"
+            required
           />
         </label>
         <label>
@@ -49,11 +60,14 @@ export default function Login() {
             name="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
+            required
           />
         </label>
         {error ? <p className="state error">{error}</p> : null}
-        <button type="submit">Log in</button>
+        <button type="submit" disabled={busy}>{busy ? 'Logging in...' : 'Log in'}</button>
       </form>
+      </div>
     </main>
   );
 }
