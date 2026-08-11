@@ -31,6 +31,7 @@ export default function SiteHeader({ user }: { user: CurrentUser | null }) {
 
   const links = [
     { href: '/', label: 'Sessions' },
+    { href: '/assistant', label: 'Assistant' },
     ...(user ? [{ href: dashboardFor(user.kind), label: 'Dashboard' }] : []),
     ...(user?.kind === 'admin' ? [{ href: '/admin/sessions', label: 'Calendar' }] : [])
   ];

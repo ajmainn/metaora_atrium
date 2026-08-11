@@ -74,6 +74,7 @@ a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
 .calendar-scroll:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--focus) 35%, transparent);
   outline-offset: 2px;
@@ -652,7 +653,8 @@ form label span {
 }
 
 input,
-select {
+select,
+textarea {
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
@@ -664,8 +666,127 @@ select {
 }
 
 input:hover,
-select:hover {
+select:hover,
+textarea:hover {
   border-color: #8f9991;
+}
+
+.assistant-page {
+  max-width: 900px;
+}
+
+.assistant-shell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 3px 14px rgb(30 40 34 / 7%);
+  display: grid;
+  min-height: min(720px, calc(100vh - 170px));
+  overflow: hidden;
+}
+
+.assistant-heading {
+  border-bottom: 1px solid var(--border);
+  padding: 22px 24px 18px;
+}
+
+.assistant-heading p {
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+.assistant-messages {
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - 330px);
+  min-height: 300px;
+  overflow-y: auto;
+  padding: 22px 24px;
+}
+
+.assistant-empty {
+  align-content: center;
+  display: grid;
+  gap: 18px;
+  min-height: 280px;
+}
+
+.assistant-empty h2 {
+  margin: 0;
+}
+
+.assistant-examples {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.assistant-examples button {
+  justify-content: flex-start;
+  min-height: 54px;
+  text-align: left;
+  white-space: normal;
+}
+
+.assistant-message {
+  display: grid;
+  gap: 5px;
+  max-width: 78%;
+}
+
+.assistant-message span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.assistant-message p {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  margin: 0;
+  padding: 11px 13px;
+  white-space: pre-wrap;
+}
+
+.assistant-message.user {
+  justify-self: end;
+}
+
+.assistant-message.user span {
+  justify-self: end;
+}
+
+.assistant-message.user p {
+  background: #e8f3ee;
+  border-color: #b8d5c8;
+}
+
+.assistant-message.assistant {
+  justify-self: start;
+}
+
+.assistant-message.assistant p {
+  background: var(--surface-muted);
+}
+
+.assistant-error {
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
+}
+
+.assistant-compose {
+  align-items: end;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 16px 24px 20px;
+}
+
+.assistant-input {
+  min-height: 54px;
+  resize: vertical;
 }
 
 .form-actions {
@@ -763,6 +884,26 @@ select:hover {
   }
 
   .form-actions button {
+    width: 100%;
+  }
+
+  .assistant-shell {
+    min-height: calc(100vh - 140px);
+  }
+
+  .assistant-examples {
+    grid-template-columns: 1fr;
+  }
+
+  .assistant-message {
+    max-width: 92%;
+  }
+
+  .assistant-compose {
+    grid-template-columns: 1fr;
+  }
+
+  .assistant-compose button {
     width: 100%;
   }
 }

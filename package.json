@@ -11,7 +11,7 @@
     "dev:api": "npm --workspace api run dev",
     "dev:web": "npm --workspace web run dev",
     "build": "npm --workspace api run build && npm --workspace web run build",
-    "test": "npm --workspace api run test"
+    "test": "npm --workspace api run test && npm --workspace web run test"
   },
   "dependencies": {
     "pg": "^8.13.1"
