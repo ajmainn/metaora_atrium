@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../db';
-import { notifyParticipantBooked, notifyParticipantCancelled } from '../emailNotifications';
+import {
+  notifyCoachCancelledSession,
+  notifyParticipantBooked,
+  notifyParticipantCancelled,
+  notifySessionRescheduled
+} from '../emailNotifications';
 import { sendPasswordSetupEmail } from '../passwordSetup';
 import { AssistantActionDeps, AssistantActionError } from '../assistant/actions';
 import { AssistantAuthError, resolveAssistantCaller, AssistantQueryFn } from '../assistant/context';
@@ -19,6 +24,8 @@ export function createAssistantRouter(options: {
     withTransaction,
     notifyParticipantBooked,
     notifyParticipantCancelled,
+    notifyCoachCancelledSession,
+    notifySessionRescheduled,
     sendPasswordSetupEmail,
     ...options.actionDeps
   };

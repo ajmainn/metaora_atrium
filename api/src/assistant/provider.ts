@@ -63,6 +63,84 @@ function stubToolCall(message: string): AssistantToolCall | null {
     return { name: 'get_my_balance', arguments: {} };
   }
 
+  const adminRescheduleMatch = /\badmin\b.*?\breschedule\b.*?(?:session)\s+(\d+).*?to\s+([0-9t:.\-z]+)/.exec(text);
+  if (adminRescheduleMatch) {
+    return {
+      name: 'admin_reschedule_session',
+      arguments: {
+        session_id: Number(adminRescheduleMatch[1]),
+        starts_at: adminRescheduleMatch[2]
+      }
+    };
+  }
+
+  const rescheduleMatch = /\breschedule\b.*?(?:my\s+)?(?:session)\s+(\d+).*?to\s+([0-9t:.\-z]+)/.exec(text);
+  if (rescheduleMatch) {
+    return {
+      name: 'reschedule_my_session',
+      arguments: {
+        session_id: Number(rescheduleMatch[1]),
+        starts_at: rescheduleMatch[2]
+      }
+    };
+  }
+
+  const adminCancelMatch = /\badmin\b.*?\bcancel\b.*?(?:session)\s+(\d+)/.exec(text);
+  if (adminCancelMatch) {
+    return {
+      name: 'admin_cancel_session',
+      arguments: {
+        session_id: Number(adminCancelMatch[1])
+      }
+    };
+  }
+
+  const coachCancelMatch = /\bcancel\b.*?(?:my\s+)?(?:session)\s+(\d+)/.exec(text);
+  if (coachCancelMatch) {
+    return {
+      name: 'cancel_my_session',
+      arguments: {
+        session_id: Number(coachCancelMatch[1])
+      }
+    };
+  }
+
+  const adminDetailsMatch = /\badmin\b.*?(?:details|attendees?)\b.*?(?:session)\s+(\d+)/.exec(text);
+  if (adminDetailsMatch) {
+    return {
+      name: 'admin_get_session_details',
+      arguments: {
+        session_id: Number(adminDetailsMatch[1])
+      }
+    };
+  }
+
+  const detailsMatch = /\b(?:details|attendees?|attendance|check-?ins?)\b.*?(?:session)\s+(\d+)/.exec(text);
+  if (detailsMatch) {
+    return {
+      name: /attendance|check-?ins?/.test(text) ? 'get_my_session_attendance' : 'get_my_session_details',
+      arguments: {
+        session_id: Number(detailsMatch[1])
+      }
+    };
+  }
+
+  if (/repeated attendees|repeat attendees|returning attendees/.test(text)) {
+    return { name: 'get_repeated_attendees', arguments: {} };
+  }
+
+  if (/my (past|upcoming )?sessions|sessions i teach|my teaching/.test(text)) {
+    return { name: 'get_my_sessions', arguments: {} };
+  }
+
+  if (/\badmin\b.*?\bpeople\b|\badmin\b.*?\bcredits\b/.test(text)) {
+    return { name: 'admin_list_people', arguments: {} };
+  }
+
+  if (/\badmin\b.*?\bsessions\b/.test(text)) {
+    return { name: 'admin_list_sessions', arguments: {} };
+  }
+
   if (/my bookings?|my sessions?|bookings?/.test(text) && !/book session|book a session|cancel/.test(text)) {
     return { name: 'get_my_bookings', arguments: {} };
   }

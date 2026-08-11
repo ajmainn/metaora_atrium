@@ -155,7 +155,7 @@ async function coachBusyPeriods(
   );
 }
 
-async function adminSessions(
+export async function adminSessions(
   queryFn: AssistantQueryFn,
   now: Date = new Date()
 ): Promise<QueryResultRow[]> {

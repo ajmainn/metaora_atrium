@@ -158,10 +158,12 @@ type ActionPerson = {
 
 type ActionSession = {
   id: number;
+  room_id?: number;
   coach_id: number;
   status: string;
   starts_at: string;
   ends_at: string;
+  room_fee_credits?: number;
   seat_fee_credits: number;
   room_capacity: number;
   discipline?: string;
@@ -180,6 +182,13 @@ type ActionEnrolment = {
   cancelled_at: string | null;
 };
 
+type ActionCheckIn = {
+  id: number;
+  enrolment_id: number;
+  checked_in_at: string;
+  voided_at?: string | null;
+};
+
 function overlaps(existing: { starts_at: string; ends_at: string }, start: string, end: string) {
   return new Date(existing.starts_at) < new Date(end) && new Date(existing.ends_at) > new Date(start);
 }
@@ -188,6 +197,9 @@ function actionState(overrides: {
   people?: ActionPerson[];
   sessions?: ActionSession[];
   enrolments?: ActionEnrolment[];
+  checkIns?: ActionCheckIn[];
+  rooms?: Array<{ id: number; name: string; capacity: number }>;
+  insufficientDebitPersonIds?: number[];
 } = {}) {
   const peopleRows: ActionPerson[] = overrides.people || [
     {
@@ -221,10 +233,12 @@ function actionState(overrides: {
   const sessionRows: ActionSession[] = overrides.sessions || [
     {
       id: 301,
+      room_id: 1,
       coach_id: 201,
       status: 'scheduled',
       starts_at: '2026-09-03T14:00:00Z',
       ends_at: '2026-09-03T15:00:00Z',
+      room_fee_credits: 40,
       seat_fee_credits: 20,
       room_capacity: 2,
       discipline: 'Writing',
@@ -233,14 +247,33 @@ function actionState(overrides: {
     }
   ];
   const enrolmentRows: ActionEnrolment[] = overrides.enrolments || [];
-  const notifications = { booked: [] as number[], cancelled: [] as Array<{ id: number; refund: number }> };
+  const checkInRows: ActionCheckIn[] = overrides.checkIns || [];
+  const rooms = overrides.rooms || [
+    { id: 1, name: 'Studio A', capacity: 2 },
+    { id: 2, name: 'Studio B', capacity: 8 }
+  ];
+  const notifications = {
+    booked: [] as number[],
+    cancelled: [] as Array<{ id: number; refund: number }>,
+    coachCancelled: [] as Array<{ id: number; affected: number }>,
+    rescheduled: [] as Array<{ id: number; affected: number }>
+  };
   const setupEmails: Array<{ email: string; tokenLength: number }> = [];
   let nextPersonId = 900;
   let nextEnrolmentId = 700;
 
   const client = {
     async query(text: string, params: unknown[] = []) {
-      if (text.startsWith('select id, email, full_name, kind, credits, active from person')) {
+      if (text.startsWith('select id, email, full_name, kind, credits, active from person order by full_name')) {
+        return {
+          rows: [...peopleRows]
+            .sort((left, right) => left.full_name.localeCompare(right.full_name))
+            .map((person) => ({ ...person, credits: String(person.credits) })),
+          rowCount: peopleRows.length
+        };
+      }
+
+      if (text.startsWith('select id, email, full_name, kind, credits, active from person') && text.includes('where id = $1')) {
         const person = peopleRows.find((row) => row.id === params[0]);
         return { rows: person ? [{ ...person, credits: String(person.credits) }] : [], rowCount: person ? 1 : 0 };
       }
@@ -273,6 +306,161 @@ function actionState(overrides: {
         return { rows: [], rowCount: 1 };
       }
 
+      if (text.startsWith('select * from session where id = $1 for update')) {
+        const session = sessionRows.find((row) => row.id === params[0]);
+        return {
+          rows: session ? [{
+            ...session,
+            room_id: session.room_id || 1,
+            discipline: session.discipline || 'Session',
+            session_type: session.session_type || 'standard',
+            room_fee_credits: session.room_fee_credits ?? 40,
+            seat_fee_credits: session.seat_fee_credits
+          }] : [],
+          rowCount: session ? 1 : 0
+        };
+      }
+
+      if (text.includes('where s.id = $1 and s.coach_id = $2')) {
+        const session = sessionRows.find((row) => row.id === params[0] && row.coach_id === params[1]);
+        return {
+          rows: session ? [{
+            ...session,
+            room_id: session.room_id || 1,
+            room_fee_credits: session.room_fee_credits ?? 40,
+            room_name: session.room_name || rooms.find((room) => room.id === (session.room_id || 1))?.name || 'Room',
+            room_capacity: session.room_capacity
+          }] : [],
+          rowCount: session ? 1 : 0
+        };
+      }
+
+      if (text.includes('where s.id = $1') && text.includes('c.full_name as coach_name')) {
+        const session = sessionRows.find((row) => row.id === params[0]);
+        const coach = session ? peopleRows.find((person) => person.id === session.coach_id) : null;
+        return {
+          rows: session && coach ? [{
+            ...session,
+            room_id: session.room_id || 1,
+            room_fee_credits: session.room_fee_credits ?? 40,
+            room_name: session.room_name || rooms.find((room) => room.id === (session.room_id || 1))?.name || 'Room',
+            room_capacity: session.room_capacity,
+            coach_name: coach.full_name,
+            coach_email: coach.email
+          }] : [],
+          rowCount: session && coach ? 1 : 0
+        };
+      }
+
+      if (text.includes('having count(distinct e.session_id) > 1')) {
+        const byPerson = new Map<number, { sessionIds: Set<number>; attended: number; cancelled: number }>();
+        for (const enrolment of enrolmentRows) {
+          const session = sessionRows.find((row) => row.id === enrolment.session_id);
+          if (!session || session.coach_id !== params[0]) continue;
+          const current = byPerson.get(enrolment.person_id) || {
+            sessionIds: new Set<number>(),
+            attended: 0,
+            cancelled: 0
+          };
+          current.sessionIds.add(enrolment.session_id);
+          if (enrolment.status === 'cancelled') current.cancelled += 1;
+          if (checkInRows.some((row) => row.enrolment_id === enrolment.id && !row.voided_at)) current.attended += 1;
+          byPerson.set(enrolment.person_id, current);
+        }
+        return {
+          rows: Array.from(byPerson.entries())
+            .filter(([, value]) => value.sessionIds.size > 1)
+            .map(([personId, value]) => {
+              const person = peopleRows.find((row) => row.id === personId) as ActionPerson;
+              return {
+                person_id: person.id,
+                full_name: person.full_name,
+                email: person.email,
+                session_count: value.sessionIds.size,
+                attended_count: value.attended,
+                cancelled_count: value.cancelled
+              };
+            }),
+          rowCount: byPerson.size
+        };
+      }
+
+      if (text.includes('from enrolment e') && text.includes('left join check_in ci')) {
+        return {
+          rows: enrolmentRows
+            .filter((enrolment) => enrolment.session_id === params[0])
+            .map((enrolment) => {
+              const person = peopleRows.find((row) => row.id === enrolment.person_id) as ActionPerson;
+              const checkIn = checkInRows.find((row) => row.enrolment_id === enrolment.id && !row.voided_at);
+              return {
+                session_id: enrolment.session_id,
+                enrolment_id: enrolment.id,
+                status: enrolment.status,
+                credits_charged: String(enrolment.credits_charged),
+                credits_refunded: String(enrolment.credits_refunded),
+                enrolled_at: enrolment.enrolled_at,
+                cancelled_at: enrolment.cancelled_at,
+                person_id: person.id,
+                full_name: person.full_name,
+                email: person.email,
+                kind: person.kind,
+                checked_in: Boolean(checkIn),
+                checked_in_at: checkIn ? checkIn.checked_in_at : null
+              };
+            }),
+          rowCount: enrolmentRows.length
+        };
+      }
+
+      if (text.includes('where e.session_id = any($1::int[])')) {
+        const ids = params[0] as number[];
+        return {
+          rows: enrolmentRows
+            .filter((enrolment) => ids.includes(enrolment.session_id))
+            .map((enrolment) => {
+              const person = peopleRows.find((row) => row.id === enrolment.person_id) as ActionPerson;
+              return {
+                session_id: enrolment.session_id,
+                enrolment_id: enrolment.id,
+                status: enrolment.status,
+                credits_charged: String(enrolment.credits_charged),
+                credits_refunded: String(enrolment.credits_refunded),
+                enrolled_at: enrolment.enrolled_at,
+                cancelled_at: enrolment.cancelled_at,
+                person_id: person.id,
+                full_name: person.full_name,
+                email: person.email,
+                kind: person.kind
+              };
+            }),
+          rowCount: enrolmentRows.length
+        };
+      }
+
+      if (text.includes('where s.coach_id = $1') && text.includes('group by s.id')) {
+        return {
+          rows: sessionRows
+            .filter((session) => session.coach_id === params[0])
+            .map((session) => {
+              const enrolledCount = enrolmentRows.filter(
+                (enrolment) => enrolment.session_id === session.id && enrolment.status === 'active'
+              ).length;
+              return {
+                ...session,
+                room_id: session.room_id || 1,
+                room_fee_credits: session.room_fee_credits ?? 40,
+                discipline: session.discipline || 'Session',
+                session_type: session.session_type || 'standard',
+                room_name: session.room_name || 'Room',
+                room_capacity: session.room_capacity,
+                enrolled_count: enrolledCount,
+                places_remaining: session.room_capacity - enrolledCount
+              };
+            }),
+          rowCount: sessionRows.length
+        };
+      }
+
       if (text.includes('r.capacity as room_capacity') && text.includes('group by s.id')) {
         return {
           rows: sessionRows
@@ -283,13 +471,19 @@ function actionState(overrides: {
               ).length;
               return {
                 id: session.id,
+                room_id: session.room_id || 1,
+                coach_id: session.coach_id,
                 discipline: session.discipline || 'Session',
                 session_type: session.session_type || 'standard',
+                status: session.status,
                 starts_at: session.starts_at,
                 ends_at: session.ends_at,
+                room_fee_credits: String(session.room_fee_credits ?? 40),
                 seat_fee_credits: String(session.seat_fee_credits),
                 room_name: session.room_name || 'Room',
                 room_capacity: session.room_capacity,
+                coach_name: peopleRows.find((person) => person.id === session.coach_id)?.full_name,
+                coach_email: peopleRows.find((person) => person.id === session.coach_id)?.email,
                 enrolled_count: enrolledCount,
                 places_remaining: session.room_capacity - enrolledCount
               };
@@ -330,6 +524,18 @@ function actionState(overrides: {
         return { rows: session ? [{ ...session }] : [], rowCount: session ? 1 : 0 };
       }
 
+      if (text.startsWith('select id, name, capacity from room')) {
+        return {
+          rows: rooms.filter((room) => room.id === params[0]),
+          rowCount: rooms.some((room) => room.id === params[0]) ? 1 : 0
+        };
+      }
+
+      if (text.includes("kind = 'coach'")) {
+        const coach = peopleRows.find((person) => person.id === params[0] && person.kind === 'coach' && person.active);
+        return { rows: coach ? [{ id: coach.id, credits: String(coach.credits) }] : [], rowCount: coach ? 1 : 0 };
+      }
+
       if (text.includes("kind in ('participant', 'coach')")) {
         const person = peopleRows.find(
           (row) => row.id === params[0] && row.active && (row.kind === 'participant' || row.kind === 'coach')
@@ -351,9 +557,62 @@ function actionState(overrides: {
         return { rows: [{ enrolled_count: enrolledCount }], rowCount: 1 };
       }
 
+      if (text.includes('from enrolment e') && text.includes('p.full_name') && text.includes('for update of e')) {
+        return {
+          rows: enrolmentRows
+            .filter((enrolment) => enrolment.session_id === params[0] && enrolment.status === 'active')
+            .map((enrolment) => {
+              const person = peopleRows.find((row) => row.id === enrolment.person_id) as ActionPerson;
+              return {
+                id: enrolment.id,
+                person_id: enrolment.person_id,
+                credits_charged: String(enrolment.credits_charged),
+                full_name: person.full_name,
+                email: person.email
+              };
+            }),
+          rowCount: enrolmentRows.length
+        };
+      }
+
+      if (text.includes('from enrolment where session_id = $1') && text.includes('for update')) {
+        return {
+          rows: enrolmentRows
+            .filter((enrolment) => enrolment.session_id === params[0] && enrolment.status === 'active')
+            .map((enrolment) => ({
+              id: enrolment.id,
+              person_id: enrolment.person_id,
+              credits_charged: String(enrolment.credits_charged)
+            })),
+          rowCount: enrolmentRows.length
+        };
+      }
+
       if (text.includes('from session') && text.includes('coach_id = $1') && text.includes('limit 1')) {
         const clash = sessionRows.find(
           (row) => row.coach_id === params[0] && row.status === 'scheduled' && overlaps(row, params[1] as string, params[2] as string)
+        );
+        return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
+      }
+
+      if (text.includes('from session') && text.includes('room_id = $2')) {
+        const clash = sessionRows.find(
+          (row) =>
+            row.id !== params[0] &&
+            (row.room_id || 1) === params[1] &&
+            row.status === 'scheduled' &&
+            overlaps(row, params[2] as string, params[3] as string)
+        );
+        return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
+      }
+
+      if (text.includes('from session') && text.includes('coach_id = $2')) {
+        const clash = sessionRows.find(
+          (row) =>
+            row.id !== params[0] &&
+            row.coach_id === params[1] &&
+            row.status === 'scheduled' &&
+            overlaps(row, params[2] as string, params[3] as string)
         );
         return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
       }
@@ -372,8 +631,28 @@ function actionState(overrides: {
         return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
       }
 
+      if (text.includes('from enrolment e') && text.includes('s.starts_at < $4')) {
+        const personId = Number(params[0]);
+        const exceptSessionId = Number(params[1]);
+        const clash = enrolmentRows.find((enrolment) => {
+          const session = sessionRows.find((row) => row.id === enrolment.session_id);
+          return (
+            session &&
+            enrolment.person_id === personId &&
+            enrolment.session_id !== exceptSessionId &&
+            enrolment.status === 'active' &&
+            session.status === 'scheduled' &&
+            overlaps(session, params[2] as string, params[3] as string)
+          );
+        });
+        return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
+      }
+
       if (text.startsWith('update person set credits = credits -')) {
         const person = peopleRows.find((row) => row.id === params[1]);
+        if ((overrides.insufficientDebitPersonIds || []).includes(Number(params[1]))) {
+          return { rows: [], rowCount: 0 };
+        }
         if (!person || person.credits < Number(params[0])) return { rows: [], rowCount: 0 };
         person.credits -= Number(params[0]);
         return { rows: [{ credits: String(person.credits) }], rowCount: 1 };
@@ -412,6 +691,21 @@ function actionState(overrides: {
         return { rows: person ? [{ id: person.id }] : [], rowCount: person ? 1 : 0 };
       }
 
+      if (text.startsWith('update enrolment set credits_charged')) {
+        const enrolment = enrolmentRows.find((row) => row.id === params[1]);
+        if (enrolment) enrolment.credits_charged = Number(params[0]);
+        return { rows: [], rowCount: enrolment ? 1 : 0 };
+      }
+
+      if (text.includes('update enrolment') && text.includes('where id = $3 and status')) {
+        const enrolment = enrolmentRows.find((row) => row.id === params[2] && row.status === 'active');
+        if (!enrolment) return { rows: [], rowCount: 0 };
+        enrolment.status = 'cancelled';
+        enrolment.credits_refunded = Number(params[0]);
+        enrolment.cancelled_at = String(params[1]);
+        return { rows: [{ id: enrolment.id }], rowCount: 1 };
+      }
+
       if (text.startsWith('update enrolment')) {
         const enrolment = enrolmentRows.find(
           (row) => row.id === params[1] && row.person_id === params[2] && row.status === 'active'
@@ -427,6 +721,30 @@ function actionState(overrides: {
         const person = peopleRows.find((row) => row.id === params[1]);
         if (person) person.credits += Number(params[0]);
         return { rows: [], rowCount: person ? 1 : 0 };
+      }
+
+      if (text === "update session set status = 'cancelled' where id = $1") {
+        const session = sessionRows.find((row) => row.id === params[0]);
+        if (session) session.status = 'cancelled';
+        return { rows: [], rowCount: session ? 1 : 0 };
+      }
+
+      if (text.startsWith('update session')) {
+        const session = sessionRows.find((row) => row.id === params[7] && row.status === 'scheduled');
+        if (!session) return { rows: [], rowCount: 0 };
+        session.room_id = Number(params[0]);
+        session.coach_id = Number(params[1]);
+        session.session_type = String(params[2]);
+        session.starts_at = String(params[3]);
+        session.ends_at = String(params[4]);
+        session.room_fee_credits = Number(params[5]);
+        session.seat_fee_credits = Number(params[6]);
+        const room = rooms.find((row) => row.id === session.room_id);
+        if (room) {
+          session.room_name = room.name;
+          session.room_capacity = room.capacity;
+        }
+        return { rows: [{ ...session }], rowCount: 1 };
       }
 
       return { rows: [], rowCount: 0 };
@@ -446,6 +764,12 @@ function actionState(overrides: {
     },
     notifyParticipantCancelled: async (id: number, refund: number) => {
       notifications.cancelled.push({ id, refund });
+    },
+    notifyCoachCancelledSession: async (id: number, affected: Array<Record<string, unknown>>) => {
+      notifications.coachCancelled.push({ id, affected: affected.length });
+    },
+    notifySessionRescheduled: async (id: number, _oldSession: unknown, _newSession: unknown, activeIds: number[]) => {
+      notifications.rescheduled.push({ id, affected: activeIds.length });
     },
     sendPasswordSetupEmail: async (email: string, rawToken: string) => {
       setupEmails.push({ email, tokenLength: rawToken.length });
@@ -1080,4 +1404,545 @@ test('assistant endpoint rejects anonymous authenticated-only stub action', asyn
       server.close((err) => err ? reject(err) : resolve());
     });
   }
+});
+
+test('coach assistant can list own past and upcoming sessions only', async () => {
+  const state = actionState({
+    sessions: [
+      {
+        id: 301,
+        room_id: 1,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-09-03T14:00:00Z',
+        ends_at: '2026-09-03T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 2,
+        discipline: 'Future Writing'
+      },
+      {
+        id: 302,
+        room_id: 1,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-08-03T14:00:00Z',
+        ends_at: '2026-08-03T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 2,
+        discipline: 'Past Writing'
+      },
+      {
+        id: 303,
+        room_id: 2,
+        coach_id: 202,
+        status: 'scheduled',
+        starts_at: '2026-09-04T14:00:00Z',
+        ends_at: '2026-09-04T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 2,
+        discipline: 'Other Coach'
+      }
+    ]
+  });
+
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+    { name: 'get_my_sessions', arguments: { coach_id: 202, role: 'admin' } },
+    { queryFn: state.query as any, now }
+  );
+
+  assert.deepEqual((result.data.upcoming as any[]).map((session) => session.id), [301]);
+  assert.deepEqual((result.data.past as any[]).map((session) => session.id), [302]);
+  assert.equal(JSON.stringify(result.data).includes('Other Coach'), false);
+});
+
+test('coach assistant can see attendees, cancellations and check-ins for own session only', async () => {
+  const state = actionState({
+    sessions: [
+      {
+        id: 301,
+        room_id: 1,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-09-03T14:00:00Z',
+        ends_at: '2026-09-03T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4
+      },
+      {
+        id: 302,
+        room_id: 2,
+        coach_id: 202,
+        status: 'scheduled',
+        starts_at: '2026-09-03T16:00:00Z',
+        ends_at: '2026-09-03T17:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4
+      }
+    ],
+    enrolments: [
+      {
+        id: 701,
+        session_id: 301,
+        person_id: 101,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T12:00:00Z',
+        cancelled_at: null
+      },
+      {
+        id: 702,
+        session_id: 301,
+        person_id: 102,
+        status: 'cancelled',
+        credits_charged: 20,
+        credits_refunded: 10,
+        enrolled_at: '2026-09-01T13:00:00Z',
+        cancelled_at: '2026-09-02T12:00:00Z'
+      },
+      {
+        id: 703,
+        session_id: 302,
+        person_id: 102,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T13:00:00Z',
+        cancelled_at: null
+      }
+    ],
+    checkIns: [{ id: 801, enrolment_id: 701, checked_in_at: '2026-09-03T14:03:00Z' }]
+  });
+
+  const details = await executeAssistantAction(
+    { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+    { name: 'get_my_session_attendance', arguments: { session_id: 301 } },
+    { queryFn: state.query as any, now }
+  );
+
+  const attendeeText = JSON.stringify(details.data);
+  assert.equal(attendeeText.includes('sofia@atrium.local'), true);
+  assert.equal(attendeeText.includes('"checked_in":true'), true);
+  assert.equal(attendeeText.includes('"status":"cancelled"'), true);
+  assert.equal(attendeeText.includes('bruno@atrium.local'), true);
+
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+        { name: 'get_my_session_details', arguments: { session_id: 302, coach_id: 202 } },
+        { queryFn: state.query as any, now }
+      ),
+    (error) => error instanceof AssistantActionError && error.status === 404
+  );
+});
+
+test('coach assistant identifies repeated attendees from enrolment and check-in data', async () => {
+  const state = actionState({
+    sessions: [
+      {
+        id: 301,
+        room_id: 1,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-08-01T14:00:00Z',
+        ends_at: '2026-08-01T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4
+      },
+      {
+        id: 302,
+        room_id: 1,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-08-08T14:00:00Z',
+        ends_at: '2026-08-08T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4
+      }
+    ],
+    enrolments: [
+      { id: 701, session_id: 301, person_id: 101, status: 'active', credits_charged: 20, credits_refunded: 0, enrolled_at: '2026-08-01T12:00:00Z', cancelled_at: null },
+      { id: 702, session_id: 302, person_id: 101, status: 'cancelled', credits_charged: 20, credits_refunded: 10, enrolled_at: '2026-08-02T12:00:00Z', cancelled_at: '2026-08-03T12:00:00Z' },
+      { id: 703, session_id: 302, person_id: 102, status: 'active', credits_charged: 20, credits_refunded: 0, enrolled_at: '2026-08-02T12:00:00Z', cancelled_at: null }
+    ],
+    checkIns: [{ id: 801, enrolment_id: 701, checked_in_at: '2026-08-01T14:04:00Z' }]
+  });
+
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+    { name: 'get_repeated_attendees', arguments: {} },
+    { queryFn: state.query as any, now }
+  );
+
+  assert.deepEqual(result.data.attendees, [
+    {
+      person_id: 101,
+      full_name: 'Sofia Marino',
+      email: 'sofia@atrium.local',
+      session_count: 2,
+      attended_count: 1,
+      cancelled_count: 1
+    }
+  ]);
+});
+
+test('coach assistant can cancel own session through existing cancellation logic', async () => {
+  const state = actionState({
+    sessions: [
+      {
+        id: 301,
+        room_id: 1,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-09-07T14:00:00Z',
+        ends_at: '2026-09-07T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4
+      }
+    ],
+    enrolments: [
+      { id: 701, session_id: 301, person_id: 101, status: 'active', credits_charged: 20, credits_refunded: 0, enrolled_at: '2026-09-01T12:00:00Z', cancelled_at: null },
+      { id: 702, session_id: 301, person_id: 102, status: 'active', credits_charged: 60, credits_refunded: 0, enrolled_at: '2026-09-01T12:00:00Z', cancelled_at: null }
+    ]
+  });
+
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+    { name: 'cancel_my_session', arguments: { session_id: 301, coach_id: 202 } },
+    {
+      queryFn: state.query as any,
+      withTransaction: state.withTransaction as any,
+      notifyCoachCancelledSession: state.notifyCoachCancelledSession as any,
+      now
+    }
+  );
+
+  assert.equal(result.data.status, 'cancelled');
+  assert.equal(result.data.room_fee_refunded, 40);
+  assert.equal(result.data.seat_fees_refunded, 80);
+  assert.equal(state.people.find((person) => person.id === 201)?.credits, 140);
+  assert.equal(state.people.find((person) => person.id === 101)?.credits, 120);
+  assert.equal(state.people.find((person) => person.id === 102)?.credits, 160);
+  assert.deepEqual(state.notifications.coachCancelled, [{ id: 301, affected: 2 }]);
+});
+
+test('coach assistant cannot cancel or reschedule another coach session', async () => {
+  const state = actionState({
+    sessions: [
+      {
+        id: 302,
+        room_id: 1,
+        coach_id: 202,
+        status: 'scheduled',
+        starts_at: '2026-09-07T14:00:00Z',
+        ends_at: '2026-09-07T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4
+      }
+    ]
+  });
+
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+        { name: 'cancel_my_session', arguments: { session_id: 302, coach_id: 202, role: 'admin' } },
+        { queryFn: state.query as any, withTransaction: state.withTransaction as any, now }
+      ),
+    (error) => error instanceof AssistantActionError && error.status === 403
+  );
+
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+        { name: 'reschedule_my_session', arguments: { session_id: 302, starts_at: '2026-09-07T14:00:00Z', ends_at: '2026-09-07T15:00:00Z' } },
+        { queryFn: state.query as any, withTransaction: state.withTransaction as any, now }
+      ),
+    (error) => error instanceof AssistantActionError && error.status === 403
+  );
+});
+
+test('coach assistant can reschedule own session and preserve enrolments', async () => {
+  const state = actionState({
+    sessions: [
+      {
+        id: 301,
+        room_id: 1,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-09-07T14:00:00Z',
+        ends_at: '2026-09-07T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4,
+        session_type: 'standard'
+      }
+    ],
+    enrolments: [
+      { id: 701, session_id: 301, person_id: 101, status: 'active', credits_charged: 20, credits_refunded: 0, enrolled_at: '2026-09-01T12:00:00Z', cancelled_at: null }
+    ]
+  });
+
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+    {
+      name: 'reschedule_my_session',
+      arguments: {
+        session_id: 301,
+        starts_at: '2026-09-08T14:00:00Z',
+        ends_at: '2026-09-08T15:00:00Z',
+        coach_id: 202
+      }
+    },
+    {
+      queryFn: state.query as any,
+      withTransaction: state.withTransaction as any,
+      notifySessionRescheduled: state.notifySessionRescheduled as any,
+      now
+    }
+  );
+
+  assert.equal((result.data.session as any).id, 301);
+  assert.equal((result.data.session as any).coach_id, 201);
+  assert.deepEqual(result.data.active_enrolment_ids, [701]);
+  assert.equal(state.enrolments[0].session_id, 301);
+  assert.deepEqual(state.notifications.rescheduled, [{ id: 301, affected: 1 }]);
+});
+
+test('coach assistant reschedule applies fee deltas and domain validation', async () => {
+  const state = actionState({
+    sessions: [
+      {
+        id: 301,
+        room_id: 1,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-09-07T14:00:00Z',
+        ends_at: '2026-09-07T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4,
+        session_type: 'standard'
+      }
+    ],
+    enrolments: [
+      { id: 701, session_id: 301, person_id: 101, status: 'active', credits_charged: 20, credits_refunded: 0, enrolled_at: '2026-09-01T12:00:00Z', cancelled_at: null }
+    ]
+  });
+
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'coach', person: { ...state.people[2], credits: '100' } as any },
+    {
+      name: 'reschedule_my_session',
+      arguments: {
+        session_id: 301,
+        session_type: 'intensive',
+        ends_at: '2026-09-07T17:30:00Z'
+      }
+    },
+    { queryFn: state.query as any, withTransaction: state.withTransaction as any, now }
+  );
+
+  assert.deepEqual(result.data.credit_adjustments, {
+    oldRoomFee: 40,
+    newRoomFee: 120,
+    oldSeatFee: 20,
+    newSeatFee: 60
+  });
+  assert.equal(state.people.find((person) => person.id === 201)?.credits, 20);
+  assert.equal(state.people.find((person) => person.id === 101)?.credits, 60);
+  assert.equal(state.enrolments[0].credits_charged, 60);
+
+  const invalid = actionState({
+    sessions: [{ ...state.sessions[0], status: 'scheduled', starts_at: '2026-09-07T14:00:00Z', ends_at: '2026-09-07T15:00:00Z', session_type: 'standard', room_fee_credits: 40, seat_fee_credits: 20 }]
+  });
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'coach', person: { ...invalid.people[2], credits: '100' } as any },
+        {
+          name: 'reschedule_my_session',
+          arguments: {
+            session_id: 301,
+            starts_at: '2026-09-06T14:00:00Z',
+            ends_at: '2026-09-06T15:00:00Z'
+          }
+        },
+        { queryFn: invalid.query as any, withTransaction: invalid.withTransaction as any, now }
+      ),
+    (error) => error instanceof AssistantActionError && /Monday to Saturday/.test(error.message)
+  );
+});
+
+test('admin assistant can retrieve full session details and people credits', async () => {
+  const state = actionState({
+    people: [
+      ...actionState().people,
+      { id: 1, email: 'admin@atrium.local', full_name: 'Admin User', kind: 'admin', credits: 0, active: true },
+      { id: 202, email: 'other.coach@atrium.local', full_name: 'Other Coach', kind: 'coach', credits: 100, active: true }
+    ],
+    sessions: [
+      {
+        id: 302,
+        room_id: 2,
+        coach_id: 202,
+        status: 'scheduled',
+        starts_at: '2026-09-07T14:00:00Z',
+        ends_at: '2026-09-07T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4
+      }
+    ],
+    enrolments: [
+      { id: 701, session_id: 302, person_id: 101, status: 'active', credits_charged: 20, credits_refunded: 0, enrolled_at: '2026-09-01T12:00:00Z', cancelled_at: null }
+    ]
+  });
+  const admin = state.people.find((person) => person.id === 1) as ActionPerson;
+
+  const details = await executeAssistantAction(
+    { authenticated: true, role: 'admin', person: { ...admin, credits: '0' } as any },
+    { name: 'admin_get_session_details', arguments: { session_id: 302 } },
+    { queryFn: state.query as any, now }
+  );
+  assert.equal((details.data.session as any).coach.email, 'other.coach@atrium.local');
+  assert.equal((details.data.attendees as any[])[0].email, 'sofia@atrium.local');
+
+  const sessions = await executeAssistantAction(
+    { authenticated: true, role: 'admin', person: { ...admin, credits: '0' } as any },
+    { name: 'admin_list_sessions', arguments: {} },
+    { queryFn: state.query as any, now }
+  );
+  assert.equal(JSON.stringify(sessions.data).includes('other.coach@atrium.local'), true);
+  assert.equal(JSON.stringify(sessions.data).includes('sofia@atrium.local'), true);
+
+  const peopleResult = await executeAssistantAction(
+    { authenticated: true, role: 'admin', person: { ...admin, credits: '0' } as any },
+    { name: 'admin_list_people', arguments: {} },
+    { queryFn: state.query as any, now }
+  );
+  assert.equal(JSON.stringify(peopleResult.data).includes('sofia@atrium.local'), true);
+  assert.equal(JSON.stringify(peopleResult.data).includes('"credits":"100"'), true);
+});
+
+test('admin assistant can cancel and reschedule sessions through normal domain services', async () => {
+  const basePeople = [
+    ...actionState().people,
+    { id: 1, email: 'admin@atrium.local', full_name: 'Admin User', kind: 'admin' as const, credits: 0, active: true },
+    { id: 202, email: 'other.coach@atrium.local', full_name: 'Other Coach', kind: 'coach' as const, credits: 100, active: true }
+  ];
+  const cancelState = actionState({
+    people: basePeople,
+    sessions: [
+      {
+        id: 302,
+        room_id: 1,
+        coach_id: 202,
+        status: 'scheduled',
+        starts_at: '2026-09-07T14:00:00Z',
+        ends_at: '2026-09-07T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4
+      }
+    ],
+    enrolments: [{ id: 701, session_id: 302, person_id: 101, status: 'active', credits_charged: 20, credits_refunded: 0, enrolled_at: '2026-09-01T12:00:00Z', cancelled_at: null }]
+  });
+  const admin = cancelState.people.find((person) => person.id === 1) as ActionPerson;
+  const cancelled = await executeAssistantAction(
+    { authenticated: true, role: 'admin', person: { ...admin, credits: '0' } as any },
+    { name: 'admin_cancel_session', arguments: { session_id: 302 } },
+    {
+      queryFn: cancelState.query as any,
+      withTransaction: cancelState.withTransaction as any,
+      notifyCoachCancelledSession: cancelState.notifyCoachCancelledSession as any,
+      now
+    }
+  );
+  assert.equal(cancelled.data.status, 'cancelled');
+  assert.deepEqual(cancelState.notifications.coachCancelled, [{ id: 302, affected: 1 }]);
+
+  const rescheduleState = actionState({
+    people: basePeople,
+    sessions: [
+      {
+        id: 303,
+        room_id: 1,
+        coach_id: 202,
+        status: 'scheduled',
+        starts_at: '2026-09-06T14:00:00Z',
+        ends_at: '2026-09-06T15:00:00Z',
+        room_fee_credits: 40,
+        seat_fee_credits: 20,
+        room_capacity: 4,
+        session_type: 'standard'
+      }
+    ]
+  });
+  const admin2 = rescheduleState.people.find((person) => person.id === 1) as ActionPerson;
+  const rescheduled = await executeAssistantAction(
+    { authenticated: true, role: 'admin', person: { ...admin2, credits: '0' } as any },
+    {
+      name: 'admin_reschedule_session',
+      arguments: { session_id: 303, starts_at: '2026-09-08T14:00:00Z', ends_at: '2026-09-08T15:00:00Z' }
+    },
+    {
+      queryFn: rescheduleState.query as any,
+      withTransaction: rescheduleState.withTransaction as any,
+      notifySessionRescheduled: rescheduleState.notifySessionRescheduled as any,
+      now
+    }
+  );
+  assert.equal((rescheduled.data.session as any).id, 303);
+  assert.deepEqual(rescheduleState.notifications.rescheduled, [{ id: 303, affected: 0 }]);
+});
+
+test('participant and anonymous callers cannot invoke coach or admin assistant actions', async () => {
+  const state = actionState();
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'participant', person: { ...state.people[0], credits: '100' } as any },
+        { name: 'cancel_my_session', arguments: { session_id: 301, role: 'coach' } },
+        { queryFn: state.query as any, withTransaction: state.withTransaction as any, now }
+      ),
+    (error) => error instanceof AssistantActionError && error.status === 403
+  );
+
+  await assert.rejects(
+    () =>
+      executeAnonymousAssistantAction(
+        { authenticated: false, role: 'anonymous' },
+        { name: 'admin_list_people', arguments: {} },
+        { queryFn: state.query as any, now }
+      ),
+    (error) => error instanceof AssistantActionError && error.status === 403
+  );
+});
+
+test('provider payload for coach omits attendees from other coaches sessions', async () => {
+  await withAssistantServer(async (url, provider) => {
+    const response = await postJson(
+      `${url}/api/assistant`,
+      { message: 'show my sessions', role: 'admin', coach_id: 202 },
+      { Cookie: `${SESSION_COOKIE}=${signSession(201, now.getTime())}` }
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(provider.request?.caller.role, 'coach');
+    assert.equal(JSON.stringify(provider.request?.data).includes('sofia@atrium.local'), true);
+    assert.equal(JSON.stringify(provider.request?.data).includes('bruno@atrium.local'), false);
+  });
 });
