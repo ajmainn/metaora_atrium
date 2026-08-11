@@ -49,8 +49,40 @@ function sessionLine(session: SessionMailDetails) {
 
 async function adminEmails(queryFn: QueryFn) {
   const admins = await queryFn<{ email: string }>("select email from person where kind = 'admin' and active = true order by id");
-  if (admins.length > 0) return admins.map((admin) => admin.email);
+  if (admins.length > 0) return uniqueEmails(admins.map((admin) => admin.email));
   return [process.env.SEED_ADMIN_EMAIL || 'admin@atrium.local'];
+}
+
+function uniqueEmails(emails: string[]) {
+  const seen = new Set<string>();
+  return emails.filter((email) => {
+    const key = email.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function sendMailToNewRecipients(
+  sent: Set<string>,
+  message: Omit<Parameters<typeof sendMailSafely>[0], 'to'> & { to: string | string[] },
+  sender?: MailSender
+) {
+  const recipients = uniqueEmails(Array.isArray(message.to) ? message.to : [message.to]).filter((email) => {
+    const key = email.toLowerCase();
+    if (sent.has(key)) return false;
+    sent.add(key);
+    return true;
+  });
+
+  if (recipients.length === 0) return false;
+  return sendMailSafely(
+    {
+      ...message,
+      to: Array.isArray(message.to) ? recipients : recipients[0]
+    },
+    sender
+  );
 }
 
 async function sessionDetails(sessionId: number, queryFn: QueryFn) {
@@ -198,8 +230,10 @@ export async function notifySessionRescheduled(
   if (!previous || !nextSession) return;
 
   const changeText = `Old: ${sessionLine(previous)}.\nNew: ${sessionLine(nextSession)}.`;
+  const sent = new Set<string>();
 
-  await sendMailSafely(
+  await sendMailToNewRecipients(
+    sent,
     {
       to: await adminEmails(queryFn),
       subject: `Atrium session rescheduled: ${nextSession.discipline}`,
@@ -207,6 +241,19 @@ export async function notifySessionRescheduled(
     },
     sender
   );
+
+  const coachRecipients = uniqueEmails([previous.coach_email, nextSession.coach_email]);
+  for (const coachEmail of coachRecipients) {
+    await sendMailToNewRecipients(
+      sent,
+      {
+        to: coachEmail,
+        subject: `Atrium session rescheduled: ${nextSession.discipline}`,
+        text: `Your Atrium teaching session has changed.\n\n${changeText}`
+      },
+      sender
+    );
+  }
 
   if (activeEnrolmentIds.length === 0) return;
 
@@ -220,7 +267,8 @@ export async function notifySessionRescheduled(
   );
 
   for (const participant of participants) {
-    await sendMailSafely(
+    await sendMailToNewRecipients(
+      sent,
       {
         to: participant.email,
         subject: `Atrium session rescheduled: ${nextSession.discipline}`,

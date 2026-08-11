@@ -34,6 +34,10 @@ function fakeClient(calls: QueryCall[]) {
         };
       }
 
+      if (text.includes('update enrolment')) {
+        return { rows: [{ id: params[2] }], rowCount: 1 };
+      }
+
       return { rows: [], rowCount: 0 };
     }
   };
@@ -86,8 +90,8 @@ for (const tier of tiers) {
     assert.deepEqual(
       enrolmentUpdates.map((call) => call.params),
       [
-        [15, 11],
-        [60, 12]
+        [15, new Date(tier.cancelledAt).toISOString(), 11],
+        [60, new Date(tier.cancelledAt).toISOString(), 12]
       ]
     );
 

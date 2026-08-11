@@ -168,6 +168,17 @@ test('sessions after 21:00 are rejected', async () => {
   );
 });
 
+test('sessions crossing a centre-local date boundary are rejected', async () => {
+  await assertRejectsBooking(
+    {
+      session_type: 'intensive',
+      starts_at: '2026-07-07T00:30:00Z',
+      ends_at: '2026-07-07T04:00:00Z'
+    },
+    /07:00-21:00/
+  );
+});
+
 test('half-open adjacent sessions are allowed', async () => {
   const client = fakeClient({
     sessions: [

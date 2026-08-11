@@ -39,6 +39,9 @@ function localParts(date: Date) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: CENTRE_TIME_ZONE,
     weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23'
@@ -47,6 +50,7 @@ function localParts(date: Date) {
   const value = (type: string) => parts.find((part) => part.type === type)?.value || '';
   return {
     weekday: value('weekday'),
+    dateKey: `${value('year')}-${value('month')}-${value('day')}`,
     minutesAfterMidnight: Number(value('hour')) * 60 + Number(value('minute'))
   };
 }
@@ -78,7 +82,11 @@ export function validateSessionSchedule(input: CreateSessionInput, now: Date): {
     throw new SessionCreationError(400, 'sessions are allowed only Monday to Saturday');
   }
 
-  if (startLocal.minutesAfterMidnight < 7 * 60 || endLocal.minutesAfterMidnight > 21 * 60) {
+  if (
+    startLocal.dateKey !== endLocal.dateKey ||
+    startLocal.minutesAfterMidnight < 7 * 60 ||
+    endLocal.minutesAfterMidnight > 21 * 60
+  ) {
     throw new SessionCreationError(400, 'sessions must fit inside centre hours of 07:00-21:00 America/New_York');
   }
 

@@ -16,8 +16,12 @@ test('the refund percentage follows the notice given', () => {
 
   assert.equal(refundPercent(hoursOfNotice(new Date('2026-10-30T15:00:00Z'), start)), 1);
   assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-01T15:00:00Z'), start)), 1);
-  assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-02T15:00:00Z'), start)), 0.5);
+  assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-01T15:00:01Z'), start)), 0.5);
   assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-03T15:00:00Z'), start)), 0.5);
+  assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-03T15:00:01Z'), start)), 0.25);
+  assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-04T15:00:00Z'), start)), 0.25);
+  assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-04T15:00:01Z'), start)), 0);
+  assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-02T15:00:00Z'), start)), 0.5);
   assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-04T09:00:00Z'), start)), 0.25);
   assert.equal(refundPercent(hoursOfNotice(new Date('2026-11-05T09:00:00Z'), start)), 0);
 });
