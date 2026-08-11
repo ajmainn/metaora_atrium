@@ -43,7 +43,8 @@ const tiers = [
   { name: '96h or more', cancelledAt: '2026-11-01T15:00:00Z', percent: 1, roomRefund: 40 },
   { name: '48-96h', cancelledAt: '2026-11-02T15:00:00Z', percent: 0.5, roomRefund: 20 },
   { name: '24-48h', cancelledAt: '2026-11-04T09:00:00Z', percent: 0.25, roomRefund: 10 },
-  { name: 'under 24h', cancelledAt: '2026-11-05T09:00:00Z', percent: 0, roomRefund: 0 }
+  { name: 'under 24h', cancelledAt: '2026-11-05T09:00:00Z', percent: 0, roomRefund: 0 },
+  { name: 'after start', cancelledAt: '2026-11-09T15:00:00Z', percent: 0, roomRefund: 0 }
 ];
 
 for (const tier of tiers) {

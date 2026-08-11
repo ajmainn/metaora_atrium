@@ -13,15 +13,51 @@ import {
 
 const router = Router();
 
-const UPDATABLE_FIELDS = [
+const UNSAFE_SESSION_UPDATE_FIELDS = [
   'room_id',
   'coach_id',
-  'discipline',
   'session_type',
   'status',
   'starts_at',
   'ends_at'
 ];
+
+type SessionViewer = { id: number; kind: 'participant' | 'coach' | 'admin' };
+
+export function visibleSessionFields(
+  person: SessionViewer,
+  session: Record<string, unknown>,
+  room: Record<string, unknown> | null
+): Record<string, unknown> {
+  const isAdmin = person.kind === 'admin';
+  const isCoachOwner = person.kind === 'coach' && person.id === session.coach_id;
+
+  if (isAdmin || isCoachOwner) return { ...session, room };
+
+  if (person.kind === 'coach') {
+    return {
+      id: session.id,
+      starts_at: session.starts_at,
+      ends_at: session.ends_at,
+      busy: true
+    };
+  }
+
+  return {
+    id: session.id,
+    discipline: session.discipline,
+    session_type: session.session_type,
+    status: session.status,
+    starts_at: session.starts_at,
+    ends_at: session.ends_at,
+    seat_fee_credits: session.seat_fee_credits,
+    room
+  };
+}
+
+export function hasUnsafeSessionMutation(body: Record<string, unknown>): boolean {
+  return UNSAFE_SESSION_UPDATE_FIELDS.some((field) => body[field] !== undefined);
+}
 
 async function notifyAfterSuccess(label: string, fn: () => Promise<void>): Promise<void> {
   try {
@@ -146,7 +182,7 @@ router.get('/dashboard', requireSession, async (_req, res) => {
       );
 
       const busy = await query(
-        `select s.id, s.discipline, s.session_type, s.starts_at, s.ends_at
+        `select s.starts_at, s.ends_at
            from session s
           where s.coach_id <> $1 and s.status = 'scheduled' and s.starts_at >= $2
           order by s.starts_at`,
@@ -192,10 +228,7 @@ router.get('/:id', requireSession, async (req, res) => {
     const isAdmin = person.kind === 'admin';
     const isCoachOwner = person.kind === 'coach' && person.id === session.coach_id;
 
-    const response: Record<string, unknown> = {
-      ...session,
-      room: rooms.length > 0 ? rooms[0] : null
-    };
+    const response = visibleSessionFields(person, session, rooms.length > 0 ? rooms[0] : null);
 
     if (isAdmin || isCoachOwner) {
       const coaches = await query('select id, full_name, email from person where id = $1', [session.coach_id]);
@@ -211,9 +244,7 @@ router.get('/:id', requireSession, async (req, res) => {
 
       response.coach = coaches.length > 0 ? coaches[0] : null;
       response.attendees = attendees;
-    } else if (person.kind === 'coach') {
-      response.busy = true;
-    } else {
+    } else if (person.kind !== 'coach') {
       const ownEnrolments = await query(
         `select id, status, credits_charged, credits_refunded, enrolled_at, cancelled_at
            from enrolment
@@ -299,6 +330,18 @@ router.patch('/:id', requireSession, requireRole('admin', 'coach'), async (req, 
     }
 
     const body = req.body || {};
+    if (hasUnsafeSessionMutation(body)) {
+      res.status(409).json({
+        error: 'room, coach, type, status and time changes are not supported; cancel and create a new session'
+      });
+      return;
+    }
+
+    if (typeof body.discipline !== 'string' || body.discipline.trim() === '') {
+      res.status(400).json({ error: 'a non-empty discipline is required' });
+      return;
+    }
+
     const existing = await query('select coach_id from session where id = $1', [id]);
     if (existing.length === 0) {
       res.status(404).json({ error: 'no such session' });
@@ -310,29 +353,9 @@ router.patch('/:id', requireSession, requireRole('admin', 'coach'), async (req, 
       return;
     }
 
-    const assignments: string[] = [];
-    const params: unknown[] = [];
-
-    for (const field of UPDATABLE_FIELDS) {
-      if (body[field] !== undefined) {
-        if (field === 'coach_id' && res.locals.person.kind !== 'admin') {
-          continue;
-        }
-        params.push(body[field]);
-        assignments.push(`${field} = $${params.length}`);
-      }
-    }
-
-    if (assignments.length === 0) {
-      res.status(400).json({ error: 'nothing to update' });
-      return;
-    }
-
-    params.push(id);
-
     const updated = await query(
-      `update session set ${assignments.join(', ')} where id = $${params.length} returning *`,
-      params
+      'update session set discipline = $1 where id = $2 returning *',
+      [body.discipline.trim(), id]
     );
 
     if (updated.length === 0) {
@@ -347,7 +370,7 @@ router.patch('/:id', requireSession, requireRole('admin', 'coach'), async (req, 
   }
 });
 
-router.post('/:id/book', requireSession, async (req, res) => {
+router.post('/:id/book', requireSession, requireRole('participant', 'coach'), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) {
@@ -384,7 +407,7 @@ router.post('/:id/book', requireSession, async (req, res) => {
   }
 });
 
-router.post('/:id/enrolments/:enrolmentId/cancel', requireSession, async (req, res) => {
+router.post('/:id/enrolments/:enrolmentId/cancel', requireSession, requireRole('participant', 'coach'), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const enrolmentId = Number(req.params.enrolmentId);
@@ -427,25 +450,27 @@ router.post('/:id/cancel', requireSession, requireRole('admin', 'coach'), async 
       return;
     }
 
-    const sessions = await query('select * from session where id = $1', [id]);
+    const result = await withTransaction(async (client) => {
+      const sessions = await client.query('select * from session where id = $1 for update', [id]);
+      if (sessions.rows.length === 0) return { error: 'not_found' as const };
 
-    if (sessions.length === 0) {
-      res.status(404).json({ error: 'no such session' });
+      const session = sessions.rows[0];
+      if (res.locals.person.kind !== 'admin' && session.coach_id !== res.locals.person.id) {
+        return { error: 'forbidden' as const };
+      }
+      if (session.status === 'cancelled') return { error: 'cancelled' as const };
+
+      return { summary: await applyCoachCancellation(client, session) };
+    }, { isolationLevel: 'serializable' });
+
+    if ('error' in result) {
+      if (result.error === 'not_found') res.status(404).json({ error: 'no such session' });
+      else if (result.error === 'forbidden') res.status(403).json({ error: 'forbidden' });
+      else res.status(409).json({ error: 'that session is already cancelled' });
       return;
     }
 
-    const session = sessions[0];
-    if (res.locals.person.kind !== 'admin' && session.coach_id !== res.locals.person.id) {
-      res.status(403).json({ error: 'forbidden' });
-      return;
-    }
-
-    if (session.status === 'cancelled') {
-      res.status(409).json({ error: 'that session is already cancelled' });
-      return;
-    }
-
-    const summary = await withTransaction((client) => applyCoachCancellation(client, session));
+    const summary = result.summary;
 
     await notifyAfterSuccess('coach cancelled session', () =>
       notifyCoachCancelledSession(id, summary.affectedParticipants)

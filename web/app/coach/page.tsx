@@ -38,9 +38,6 @@ type AttendingSession = {
   credits_charged: string;
 };
 type BusySession = {
-  id: number;
-  discipline: string;
-  session_type: string;
   starts_at: string;
   ends_at: string;
 };
@@ -84,14 +81,14 @@ function coachCalendarItems(dashboard: Dashboard) {
       ends_at: session.ends_at,
       detail: `${typeLabels[session.session_type] || session.session_type} - ${session.room_name}`
     })),
-    ...dashboard.busy.map((session) => ({
-      key: `busy-${session.id}`,
+    ...dashboard.busy.map((session, index) => ({
+      key: `busy-${session.starts_at}-${session.ends_at}-${index}`,
       day: centreDateKey(session.starts_at),
       title: 'Busy',
       label: 'Other coach',
       starts_at: session.starts_at,
       ends_at: session.ends_at,
-      detail: typeLabels[session.session_type] || session.session_type
+      detail: 'Reserved'
     }))
   ];
 
@@ -272,12 +269,10 @@ export default function CoachDashboard() {
         {dashboard.busy.length === 0 ? <p className="state">No other scheduled coach sessions.</p> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Discipline</th><th>Type</th><th>Busy period</th></tr></thead>
+              <thead><tr><th>Busy period</th></tr></thead>
               <tbody>
-                {dashboard.busy.map((session) => (
-                  <tr key={session.id}>
-                    <td>{session.discipline}</td>
-                    <td>{typeLabels[session.session_type] || session.session_type}</td>
+                {dashboard.busy.map((session, index) => (
+                  <tr key={`${session.starts_at}-${session.ends_at}-${index}`}>
                     <td>{formatCentreRange(session.starts_at, session.ends_at)}</td>
                   </tr>
                 ))}

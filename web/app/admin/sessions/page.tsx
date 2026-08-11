@@ -6,6 +6,7 @@ import {
   addDaysToDateKey,
   centreDateKey,
   centreHour,
+  centreLocalDateTimeToIso,
   dateKeyToDate,
   formatCentreDateKey,
   startOfCentreWeekKey
@@ -52,6 +53,7 @@ export default function AdminSessions() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [authorized, setAuthorized] = useState(false);
+  const [error, setError] = useState('');
 
   const [date, setDate] = useState('');
   const [startTime, setStartTime] = useState('');
@@ -63,18 +65,22 @@ export default function AdminSessions() {
 
   const days = [0, 1, 2, 3, 4, 5, 6].map((offset) => addDaysToDateKey(weekStartKey, offset));
 
-  function loadSessions() {
+  async function loadSessions() {
     if (!authorized) return;
 
     const from = new Date(dateKeyToDate(weekStartKey).getTime() - dayMilliseconds);
     const to = new Date(dateKeyToDate(addDaysToDateKey(weekStartKey, 7)).getTime() + dayMilliseconds);
 
-    fetch(
-      `${apiBaseUrl}/api/sessions?from=${from.toISOString()}&to=${to.toISOString()}`,
-      { credentials: 'include' }
-    )
-      .then((res) => res.json())
-      .then(setSessions);
+    try {
+      const res = await fetch(
+        `${apiBaseUrl}/api/sessions?from=${from.toISOString()}&to=${to.toISOString()}`,
+        { credentials: 'include' }
+      );
+      if (!res.ok) throw new Error('Could not load sessions.');
+      setSessions(await res.json());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load sessions.');
+    }
   }
 
   useEffect(() => {
@@ -116,21 +122,29 @@ export default function AdminSessions() {
     event.preventDefault();
     if (!authorized) return;
 
-    await fetch(`${apiBaseUrl}/api/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        room_id: Number(roomId),
-        coach_id: Number(coachId),
-        discipline,
-        session_type: sessionType,
-        starts_at: new Date(`${date}T${startTime}`).toISOString(),
-        ends_at: new Date(`${date}T${endTime}`).toISOString()
-      })
-    });
-
-    loadSessions();
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          room_id: Number(roomId),
+          coach_id: Number(coachId),
+          discipline,
+          session_type: sessionType,
+          starts_at: centreLocalDateTimeToIso(date, startTime),
+          ends_at: centreLocalDateTimeToIso(date, endTime)
+        })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Could not create session.');
+      }
+      await loadSessions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create session.');
+    }
   }
 
   if (!authorized) return <main><p className="state">Loading...</p></main>;
@@ -138,6 +152,8 @@ export default function AdminSessions() {
   return (
     <main>
       <h1>Session calendar</h1>
+
+      {error ? <p className="state error">{error}</p> : null}
 
       <p>
         <button onClick={() => setWeekStartKey(addDaysToDateKey(weekStartKey, -7))}>

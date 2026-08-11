@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { Request, Response, NextFunction } from 'express';
+import type { CookieOptions } from 'express';
 import { query } from './db';
 
 export const SESSION_COOKIE = 'atrium_session';
@@ -41,7 +42,7 @@ function safeEqual(a: string, b: string): boolean {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-function verifyPassword(password: string, stored: string): boolean {
+export function verifyPassword(password: string, stored: string): boolean {
   const parts = stored.split('$');
   if (parts[0] !== 'scrypt' || parts.length !== 6) {
     return safeEqual(legacyHashPassword(password), stored);
@@ -60,6 +61,15 @@ function dashboardFor(kind: PersonKind): string {
   if (kind === 'admin') return '/admin';
   if (kind === 'coach') return '/coach';
   return '/participant';
+}
+
+export function sessionCookieSecurityOptions(): CookieOptions {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/'
+  };
 }
 
 export function signSession(personId: number, issuedAt: number = Date.now()): string {
@@ -169,9 +179,7 @@ export async function login(req: Request, res: Response): Promise<void> {
     }
 
     res.cookie(SESSION_COOKIE, signSession(person.id), {
-      httpOnly: true,
-      sameSite: 'lax',
-      path: '/',
+      ...sessionCookieSecurityOptions(),
       maxAge: SESSION_MAX_AGE_MS
     });
 
@@ -189,7 +197,7 @@ export async function login(req: Request, res: Response): Promise<void> {
 }
 
 export function logout(_req: Request, res: Response): void {
-  res.clearCookie(SESSION_COOKIE, { path: '/' });
+  res.clearCookie(SESSION_COOKIE, sessionCookieSecurityOptions());
   res.json({ signed_out: true });
 }
 

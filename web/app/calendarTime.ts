@@ -79,6 +79,37 @@ export function dateKeyToDate(key: string) {
   return new Date(`${key}T12:00:00Z`);
 }
 
+export function centreLocalDateTimeToIso(dateKey: string, time: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(`${dateKey}T${time}`);
+  if (!match) throw new Error('Enter a valid date and time.');
+
+  const [, year, month, day, hour, minute] = match.map(Number);
+  const wantedUtc = Date.UTC(year, month - 1, day, hour, minute);
+  const firstGuess = new Date(wantedUtc);
+  const guessParts = parts(firstGuess);
+  const representedUtc = Date.UTC(
+    Number(guessParts.year),
+    Number(guessParts.month) - 1,
+    Number(guessParts.day),
+    guessParts.hour,
+    guessParts.minute
+  );
+  const result = new Date(firstGuess.getTime() + wantedUtc - representedUtc);
+  const resultParts = parts(result);
+
+  if (
+    Number(resultParts.year) !== year ||
+    Number(resultParts.month) !== month ||
+    Number(resultParts.day) !== day ||
+    resultParts.hour !== hour ||
+    resultParts.minute !== minute
+  ) {
+    throw new Error('That local time does not exist in New York.');
+  }
+
+  return result.toISOString();
+}
+
 export function formatCentreDateKey(key: string) {
   return dateFormatter.format(dateKeyToDate(key));
 }

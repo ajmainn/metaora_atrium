@@ -121,6 +121,12 @@ test('under 12h gives no refund', async () => {
   assert.equal(result.credits_refunded_now, 0);
 });
 
+test('cancellation after session start gives no refund', async () => {
+  const { result } = await cancelAt('2026-07-10T12:00:00Z');
+  assert.equal(result.refund_percent, 0);
+  assert.equal(result.credits_refunded_now, 0);
+});
+
 test('integer rounding uses the existing refund helper', async () => {
   assert.equal(refundAmount(15, 0.5), 7);
   const { result } = await cancelAt('2026-07-05T12:00:00Z', { creditsCharged: '15' });

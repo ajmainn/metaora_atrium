@@ -27,3 +27,11 @@ test('a refund of part of a credit', () => {
   assert.equal(refundAmount(120, 0.25), 30);
   assert.equal(refundAmount(30, 0.25), 7);
 });
+
+test('cancellation after the session starts has negative notice and no refund', () => {
+  const start = new Date('2026-11-05T15:00:00Z');
+  const notice = hoursOfNotice(new Date('2026-11-09T15:00:00Z'), start);
+
+  assert.equal(notice, -96);
+  assert.equal(refundPercent(notice), 0);
+});
