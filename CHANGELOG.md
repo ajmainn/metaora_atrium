@@ -342,3 +342,17 @@ Why:
 Verification:
 - Desktop and 375px browser checks confirm the catalogue is bounded to 10 rows and remains horizontally scrollable on narrow screens.
 - Existing API tests and full production builds pass.
+
+## Historical Check-in Preservation
+
+- Added `migrations/007_restore_historical_check_ins.sql`.
+  - Restores the nine seeded check-ins removed by earlier cleanup migrations using their original IDs, enrolments, and timestamps.
+  - Marks invalid historical events as voided instead of deleting them.
+  - Replaces the check-in constraint with a partial unique index covering valid events only.
+- Updated the administrator digest to exclude voided check-ins from attendance totals.
+- Added focused migration and digest-query tests.
+- Added `README.md` with setup, data corrections, policies, invariants, transaction choices, assumptions, and unfinished work.
+
+Why:
+- `INSTRUCTIONS.md` prohibits deleting seeded rows to make a constraint apply.
+- Preserving voided events keeps the historical dataset auditable without counting invalid attendance.

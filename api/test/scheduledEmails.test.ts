@@ -72,6 +72,7 @@ test('administrator receives daily digest', async () => {
   const messages: MailMessage[] = [];
   const queryFn = async (text: string) => {
     if (text.includes("kind = 'admin'")) return [{ email: 'admin@atrium.local' }];
+    assert.match(text, /ci\.voided_at is null/);
     return [
       {
         discipline: 'nutrition',

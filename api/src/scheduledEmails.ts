@@ -223,7 +223,7 @@ export async function sendAdminDailyDigest(
        join room r on r.id = s.room_id
        join person c on c.id = s.coach_id
        left join enrolment e on e.session_id = s.id and e.status = 'active'
-       left join check_in ci on ci.enrolment_id = e.id
+       left join check_in ci on ci.enrolment_id = e.id and ci.voided_at is null
       where s.status = 'scheduled'
         and s.starts_at >= $1
         and s.starts_at < $2
