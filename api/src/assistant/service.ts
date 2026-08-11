@@ -1,3 +1,9 @@
+import {
+  AssistantActionDeps,
+  AssistantActionError,
+  assistantToolDescriptions,
+  executeAnonymousAssistantAction
+} from './actions';
 import { AssistantCallerContext, AssistantQueryFn } from './context';
 import { AssistantProvider } from './provider';
 import { buildAssistantToolData, AssistantToolData } from './tools';
@@ -42,7 +48,8 @@ export async function runAssistant(
   caller: AssistantCallerContext,
   provider: AssistantProvider,
   queryFn: AssistantQueryFn,
-  now: Date = new Date()
+  now: Date = new Date(),
+  actionDeps: Omit<AssistantActionDeps, 'queryFn' | 'now'> = {}
 ): Promise<AssistantResult & { data: AssistantToolData }> {
   const data = await buildAssistantToolData(caller, queryFn, now);
   const result = await provider.complete({
@@ -52,8 +59,34 @@ export async function runAssistant(
       role: caller.role,
       authenticated: caller.authenticated
     },
-    data
+    data,
+    availableTools: assistantToolDescriptions
   });
+
+  if (result.toolCall) {
+    const actionResult = await executeAnonymousAssistantAction(caller, result.toolCall, {
+      queryFn,
+      now,
+      ...actionDeps
+    });
+    const final = await provider.complete({
+      message: input.message,
+      conversation: input.conversation || [],
+      caller: {
+        role: caller.role,
+        authenticated: caller.authenticated
+      },
+      data,
+      availableTools: assistantToolDescriptions,
+      toolResults: [actionResult]
+    });
+
+    return {
+      role: caller.role,
+      response: final.content || JSON.stringify(actionResult.data),
+      data
+    };
+  }
 
   return {
     role: caller.role,
@@ -61,3 +94,5 @@ export async function runAssistant(
     data
   };
 }
+
+export { AssistantActionError };

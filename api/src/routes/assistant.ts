@@ -1,5 +1,8 @@
 import { Router } from 'express';
-import { query } from '../db';
+import { query, withTransaction } from '../db';
+import { notifyParticipantBooked, notifyParticipantCancelled } from '../emailNotifications';
+import { sendPasswordSetupEmail } from '../passwordSetup';
+import { AssistantActionDeps, AssistantActionError } from '../assistant/actions';
 import { AssistantAuthError, resolveAssistantCaller, AssistantQueryFn } from '../assistant/context';
 import { assistantProviderFromEnv, AssistantProvider } from '../assistant/provider';
 import { parseAssistantInput, runAssistant } from '../assistant/service';
@@ -7,16 +10,24 @@ import { parseAssistantInput, runAssistant } from '../assistant/service';
 export function createAssistantRouter(options: {
   provider?: AssistantProvider;
   queryFn?: AssistantQueryFn;
+  actionDeps?: Omit<AssistantActionDeps, 'queryFn'>;
 } = {}) {
   const router = Router();
   const queryFn = options.queryFn || query;
   const provider = options.provider || assistantProviderFromEnv();
+  const actionDeps = {
+    withTransaction,
+    notifyParticipantBooked,
+    notifyParticipantCancelled,
+    sendPasswordSetupEmail,
+    ...options.actionDeps
+  };
 
   router.post('/', async (req, res) => {
     try {
       const input = parseAssistantInput(req.body);
       const caller = await resolveAssistantCaller(req, queryFn);
-      const result = await runAssistant(input, caller, provider, queryFn);
+      const result = await runAssistant(input, caller, provider, queryFn, new Date(), actionDeps);
 
       res.json({
         role: result.role,
@@ -24,6 +35,11 @@ export function createAssistantRouter(options: {
       });
     } catch (err) {
       if (err instanceof AssistantAuthError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+
+      if (err instanceof AssistantActionError) {
         res.status(err.status).json({ error: err.message });
         return;
       }

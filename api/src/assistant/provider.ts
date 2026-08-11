@@ -1,3 +1,4 @@
+import { AssistantActionResult, AssistantToolCall } from './actions';
 import { AssistantCallerContext } from './context';
 import { AssistantToolData } from './tools';
 
@@ -9,10 +10,13 @@ export type AssistantProviderRequest = {
     authenticated: boolean;
   };
   data: AssistantToolData;
+  availableTools: readonly { name: string; description: string; roles: readonly string[] }[];
+  toolResults?: AssistantActionResult[];
 };
 
 export type AssistantProviderResponse = {
   content: string;
+  toolCall?: AssistantToolCall;
 };
 
 export interface AssistantProvider {
@@ -21,6 +25,18 @@ export interface AssistantProvider {
 
 export class StubAssistantProvider implements AssistantProvider {
   async complete(request: AssistantProviderRequest): Promise<AssistantProviderResponse> {
+    if (request.toolResults && request.toolResults.length > 0) {
+      const result = request.toolResults[request.toolResults.length - 1];
+      return {
+        content: `stub:${request.caller.role}; tool=${result.tool}; ok=${result.ok}; data=${JSON.stringify(result.data)}`
+      };
+    }
+
+    const toolCall = stubToolCall(request.message);
+    if (toolCall) {
+      return { content: '', toolCall };
+    }
+
     const parts = [
       `stub:${request.caller.role}`,
       `public_sessions=${request.data.public_sessions.length}`
@@ -34,6 +50,61 @@ export class StubAssistantProvider implements AssistantProvider {
 
     return { content: parts.join('; ') };
   }
+}
+
+function stubToolCall(message: string): AssistantToolCall | null {
+  const text = message.toLowerCase();
+
+  if (/unknown_tool|bad_tool|drop table/.test(text)) {
+    return { name: 'unknown_tool', arguments: {} };
+  }
+
+  if (/balance|credits?/.test(text) && /my|remaining/.test(text)) {
+    return { name: 'get_my_balance', arguments: {} };
+  }
+
+  if (/my bookings?|my sessions?|bookings?/.test(text) && !/book session|book a session|cancel/.test(text)) {
+    return { name: 'get_my_bookings', arguments: {} };
+  }
+
+  const cancelMatch = /\bcancel\b.*?(?:booking|enrolment)\s+(\d+).*?(?:session)\s+(\d+)/.exec(text)
+    || /\bcancel\b.*?(?:session)\s+(\d+).*?(?:booking|enrolment)\s+(\d+)/.exec(text);
+  if (cancelMatch) {
+    return {
+      name: 'cancel_booking',
+      arguments: {
+        enrolment_id: Number(cancelMatch[1]),
+        session_id: Number(cancelMatch[2])
+      }
+    };
+  }
+
+  const anonymousBookMatch = /\bbook\b.*?(?:session)\s+(\d+).*?([^\s@]+@[^\s@]+\.[^\s@]+)/.exec(text);
+  if (anonymousBookMatch) {
+    return {
+      name: 'anonymous_book_session',
+      arguments: {
+        session_id: Number(anonymousBookMatch[1]),
+        email: anonymousBookMatch[2]
+      }
+    };
+  }
+
+  const bookMatch = /\bbook\b.*?(?:session)\s+(\d+)/.exec(text);
+  if (bookMatch) {
+    return {
+      name: 'book_session',
+      arguments: {
+        session_id: Number(bookMatch[1])
+      }
+    };
+  }
+
+  if (/search|list|available|sessions?|cost|price|places|when/.test(text)) {
+    return { name: 'search_sessions', arguments: {} };
+  }
+
+  return null;
 }
 
 export class OllamaAssistantProvider implements AssistantProvider {
@@ -61,6 +132,13 @@ export class OllamaAssistantProvider implements AssistantProvider {
             content:
               'You are Atrium assistant. Answer only from the authorized JSON data supplied by the server.'
           },
+          {
+            role: 'system',
+            content: JSON.stringify({
+              available_tools: request.availableTools,
+              tool_results: request.toolResults || []
+            })
+          },
           ...request.conversation,
           {
             role: 'user',
@@ -82,7 +160,17 @@ export class OllamaAssistantProvider implements AssistantProvider {
     }
 
     const body = await response.json() as { message?: { content?: string }; response?: string };
-    return { content: body.message?.content || body.response || '' };
+    const content = body.message?.content || body.response || '';
+
+    try {
+      const parsed = JSON.parse(content) as { tool_call?: AssistantToolCall; response?: string };
+      if (parsed.tool_call) return { content: parsed.response || '', toolCall: parsed.tool_call };
+      if (parsed.response) return { content: parsed.response };
+    } catch {
+      // Plain text model replies are fine.
+    }
+
+    return { content };
   }
 }
 

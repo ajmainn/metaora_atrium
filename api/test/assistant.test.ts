@@ -5,6 +5,11 @@ import cookieParser from 'cookie-parser';
 import { Server } from 'node:http';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
+import {
+  AssistantActionError,
+  executeAnonymousAssistantAction,
+  executeAssistantAction
+} from '../src/assistant/actions';
 import { buildAssistantToolData } from '../src/assistant/tools';
 import { resolveAssistantCaller } from '../src/assistant/context';
 import {
@@ -140,6 +145,314 @@ const attendees = [
     kind: 'participant'
   }
 ];
+
+type ActionPerson = {
+  id: number;
+  email: string;
+  full_name: string;
+  kind: 'participant' | 'coach' | 'admin';
+  credits: number;
+  active: boolean;
+  password_hash?: string | null;
+};
+
+type ActionSession = {
+  id: number;
+  coach_id: number;
+  status: string;
+  starts_at: string;
+  ends_at: string;
+  seat_fee_credits: number;
+  room_capacity: number;
+  discipline?: string;
+  session_type?: string;
+  room_name?: string;
+};
+
+type ActionEnrolment = {
+  id: number;
+  session_id: number;
+  person_id: number;
+  status: string;
+  credits_charged: number;
+  credits_refunded: number;
+  enrolled_at: string;
+  cancelled_at: string | null;
+};
+
+function overlaps(existing: { starts_at: string; ends_at: string }, start: string, end: string) {
+  return new Date(existing.starts_at) < new Date(end) && new Date(existing.ends_at) > new Date(start);
+}
+
+function actionState(overrides: {
+  people?: ActionPerson[];
+  sessions?: ActionSession[];
+  enrolments?: ActionEnrolment[];
+} = {}) {
+  const peopleRows: ActionPerson[] = overrides.people || [
+    {
+      id: 101,
+      email: 'sofia@atrium.local',
+      full_name: 'Sofia Marino',
+      kind: 'participant',
+      credits: 100,
+      active: true,
+      password_hash: 'scrypt$'
+    },
+    {
+      id: 102,
+      email: 'bruno@atrium.local',
+      full_name: 'Bruno Ito',
+      kind: 'participant',
+      credits: 100,
+      active: true,
+      password_hash: 'scrypt$'
+    },
+    {
+      id: 201,
+      email: 'coach@atrium.local',
+      full_name: 'Coach Person',
+      kind: 'coach',
+      credits: 100,
+      active: true,
+      password_hash: 'scrypt$'
+    }
+  ];
+  const sessionRows: ActionSession[] = overrides.sessions || [
+    {
+      id: 301,
+      coach_id: 201,
+      status: 'scheduled',
+      starts_at: '2026-09-03T14:00:00Z',
+      ends_at: '2026-09-03T15:00:00Z',
+      seat_fee_credits: 20,
+      room_capacity: 2,
+      discipline: 'Writing',
+      session_type: 'standard',
+      room_name: 'Studio A'
+    }
+  ];
+  const enrolmentRows: ActionEnrolment[] = overrides.enrolments || [];
+  const notifications = { booked: [] as number[], cancelled: [] as Array<{ id: number; refund: number }> };
+  const setupEmails: Array<{ email: string; tokenLength: number }> = [];
+  let nextPersonId = 900;
+  let nextEnrolmentId = 700;
+
+  const client = {
+    async query(text: string, params: unknown[] = []) {
+      if (text.startsWith('select id, email, full_name, kind, credits, active from person')) {
+        const person = peopleRows.find((row) => row.id === params[0]);
+        return { rows: person ? [{ ...person, credits: String(person.credits) }] : [], rowCount: person ? 1 : 0 };
+      }
+
+      if (text.includes('from person where lower(email)')) {
+        const email = String(params[0]);
+        const person = peopleRows.find((row) => row.email.toLowerCase() === email);
+        return { rows: person ? [{ ...person }] : [], rowCount: person ? 1 : 0 };
+      }
+
+      if (text.startsWith('insert into person')) {
+        const person: ActionPerson = {
+          id: nextPersonId++,
+          email: String(params[0]),
+          full_name: String(params[1]),
+          kind: 'participant',
+          credits: Number(params[2]),
+          active: true,
+          password_hash: null
+        };
+        peopleRows.push(person);
+        return { rows: [{ ...person }], rowCount: 1 };
+      }
+
+      if (text.includes('update password_setup_token')) {
+        return { rows: [], rowCount: 0 };
+      }
+
+      if (text.includes('insert into password_setup_token')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (text.includes('r.capacity as room_capacity') && text.includes('group by s.id')) {
+        return {
+          rows: sessionRows
+            .filter((session) => session.status === 'scheduled')
+            .map((session) => {
+              const enrolledCount = enrolmentRows.filter(
+                (enrolment) => enrolment.session_id === session.id && enrolment.status === 'active'
+              ).length;
+              return {
+                id: session.id,
+                discipline: session.discipline || 'Session',
+                session_type: session.session_type || 'standard',
+                starts_at: session.starts_at,
+                ends_at: session.ends_at,
+                seat_fee_credits: String(session.seat_fee_credits),
+                room_name: session.room_name || 'Room',
+                room_capacity: session.room_capacity,
+                enrolled_count: enrolledCount,
+                places_remaining: session.room_capacity - enrolledCount
+              };
+            }),
+          rowCount: sessionRows.length
+        };
+      }
+
+      if (text.includes('where e.person_id = $1') && text.includes('order by s.starts_at')) {
+        return {
+          rows: enrolmentRows
+            .filter((enrolment) => enrolment.person_id === params[0])
+            .map((enrolment) => {
+              const session = sessionRows.find((row) => row.id === enrolment.session_id) as ActionSession;
+              return {
+                enrolment_id: enrolment.id,
+                enrolment_status: enrolment.status,
+                credits_charged: String(enrolment.credits_charged),
+                credits_refunded: String(enrolment.credits_refunded),
+                enrolled_at: enrolment.enrolled_at,
+                cancelled_at: enrolment.cancelled_at,
+                session_id: session.id,
+                discipline: session.discipline || 'Session',
+                session_type: session.session_type || 'standard',
+                session_status: session.status,
+                starts_at: session.starts_at,
+                ends_at: session.ends_at,
+                seat_fee_credits: String(session.seat_fee_credits),
+                room_name: session.room_name || 'Room'
+              };
+            }),
+          rowCount: enrolmentRows.length
+        };
+      }
+
+      if (text.includes('from session s') && text.includes('where s.id = $1') && text.includes('for update of s')) {
+        const session = sessionRows.find((row) => row.id === params[0]);
+        return { rows: session ? [{ ...session }] : [], rowCount: session ? 1 : 0 };
+      }
+
+      if (text.includes("kind in ('participant', 'coach')")) {
+        const person = peopleRows.find(
+          (row) => row.id === params[0] && row.active && (row.kind === 'participant' || row.kind === 'coach')
+        );
+        return { rows: person ? [{ id: person.id, credits: String(person.credits) }] : [], rowCount: person ? 1 : 0 };
+      }
+
+      if (text.includes("where session_id = $1 and person_id = $2 and status = 'active'")) {
+        const duplicate = enrolmentRows.find(
+          (row) => row.session_id === params[0] && row.person_id === params[1] && row.status === 'active'
+        );
+        return { rows: duplicate ? [{ id: duplicate.id }] : [], rowCount: duplicate ? 1 : 0 };
+      }
+
+      if (text.includes('count(*)::int as enrolled_count')) {
+        const enrolledCount = enrolmentRows.filter(
+          (row) => row.session_id === params[0] && row.status === 'active'
+        ).length;
+        return { rows: [{ enrolled_count: enrolledCount }], rowCount: 1 };
+      }
+
+      if (text.includes('from session') && text.includes('coach_id = $1') && text.includes('limit 1')) {
+        const clash = sessionRows.find(
+          (row) => row.coach_id === params[0] && row.status === 'scheduled' && overlaps(row, params[1] as string, params[2] as string)
+        );
+        return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
+      }
+
+      if (text.includes('from enrolment e') && text.includes('s.starts_at < $3')) {
+        const clash = enrolmentRows.find((enrolment) => {
+          const session = sessionRows.find((row) => row.id === enrolment.session_id);
+          return (
+            session &&
+            enrolment.person_id === params[0] &&
+            enrolment.status === 'active' &&
+            session.status === 'scheduled' &&
+            overlaps(session, params[1] as string, params[2] as string)
+          );
+        });
+        return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
+      }
+
+      if (text.startsWith('update person set credits = credits -')) {
+        const person = peopleRows.find((row) => row.id === params[1]);
+        if (!person || person.credits < Number(params[0])) return { rows: [], rowCount: 0 };
+        person.credits -= Number(params[0]);
+        return { rows: [{ credits: String(person.credits) }], rowCount: 1 };
+      }
+
+      if (text.startsWith('insert into enrolment')) {
+        const enrolment: ActionEnrolment = {
+          id: nextEnrolmentId++,
+          session_id: Number(params[0]),
+          person_id: Number(params[1]),
+          status: 'active',
+          credits_charged: Number(params[2]),
+          credits_refunded: 0,
+          enrolled_at: '2026-09-01T12:00:00Z',
+          cancelled_at: null
+        };
+        enrolmentRows.push(enrolment);
+        return { rows: [{ ...enrolment }], rowCount: 1 };
+      }
+
+      if (text.includes('from enrolment e') && text.includes('where e.id = $1 and e.session_id = $2')) {
+        const enrolment = enrolmentRows.find((row) => row.id === params[0] && row.session_id === params[1]);
+        const session = enrolment ? sessionRows.find((row) => row.id === enrolment.session_id) : null;
+        return {
+          rows: enrolment && session ? [{
+            ...enrolment,
+            session_status: session.status,
+            starts_at: session.starts_at
+          }] : [],
+          rowCount: enrolment && session ? 1 : 0
+        };
+      }
+
+      if (text.startsWith('select id from person where id = $1 for update')) {
+        const person = peopleRows.find((row) => row.id === params[0]);
+        return { rows: person ? [{ id: person.id }] : [], rowCount: person ? 1 : 0 };
+      }
+
+      if (text.startsWith('update enrolment')) {
+        const enrolment = enrolmentRows.find(
+          (row) => row.id === params[1] && row.person_id === params[2] && row.status === 'active'
+        );
+        if (!enrolment) return { rows: [], rowCount: 0 };
+        enrolment.status = 'cancelled';
+        enrolment.credits_refunded = Number(params[0]);
+        enrolment.cancelled_at = '2026-09-01T12:00:00Z';
+        return { rows: [{ ...enrolment }], rowCount: 1 };
+      }
+
+      if (text.startsWith('update person set credits = credits +')) {
+        const person = peopleRows.find((row) => row.id === params[1]);
+        if (person) person.credits += Number(params[0]);
+        return { rows: [], rowCount: person ? 1 : 0 };
+      }
+
+      return { rows: [], rowCount: 0 };
+    }
+  };
+
+  return {
+    people: peopleRows,
+    sessions: sessionRows,
+    enrolments: enrolmentRows,
+    notifications,
+    setupEmails,
+    query: async (text: string, params?: unknown[]) => (await client.query(text, params)).rows,
+    withTransaction: async <T>(fn: (txClient: any) => Promise<T>) => fn(client as any),
+    notifyParticipantBooked: async (id: number) => {
+      notifications.booked.push(id);
+    },
+    notifyParticipantCancelled: async (id: number, refund: number) => {
+      notifications.cancelled.push({ id, refund });
+    },
+    sendPasswordSetupEmail: async (email: string, rawToken: string) => {
+      setupEmails.push({ email, tokenLength: rawToken.length });
+      return true;
+    }
+  };
+}
 
 function fakeQuery() {
   const calls: Array<{ text: string; params?: unknown[] }> = [];
@@ -393,4 +706,378 @@ test('assistant endpoint works authenticated and request role does not escalate 
     assert.equal(provider.request?.data.profile?.id, 101);
     assert.equal(JSON.stringify(provider.request?.data).includes('bruno@atrium.local'), false);
   });
+});
+
+test('anonymous assistant action can search public sessions with prices and places', async () => {
+  const state = actionState();
+  const result = await executeAnonymousAssistantAction(
+    { authenticated: false, role: 'anonymous' },
+    { name: 'search_sessions', arguments: {} },
+    { queryFn: state.query as any, now }
+  );
+
+  assert.equal(result.tool, 'search_sessions');
+  assert.deepEqual((result.data.sessions as any[])[0], {
+    id: 301,
+    discipline: 'Writing',
+    session_type: 'standard',
+    starts_at: '2026-09-03T14:00:00Z',
+    ends_at: '2026-09-03T15:00:00Z',
+    seat_fee_credits: '20',
+    room_name: 'Studio A',
+    room_capacity: 2,
+    places_remaining: 2
+  });
+});
+
+test('anonymous assistant action books with email and sends setup flow without a password', async () => {
+  const state = actionState();
+  const result = await executeAnonymousAssistantAction(
+    { authenticated: false, role: 'anonymous' },
+    { name: 'anonymous_book_session', arguments: { session_id: 301, email: 'New.Visitor@Example.com' } },
+    {
+      queryFn: state.query as any,
+      withTransaction: state.withTransaction as any,
+      notifyParticipantBooked: state.notifyParticipantBooked,
+      sendPasswordSetupEmail: state.sendPasswordSetupEmail,
+      now
+    }
+  );
+
+  assert.equal(result.tool, 'anonymous_book_session');
+  assert.equal(result.data.status, 'active');
+  assert.equal(result.data.credits_charged, 20);
+  assert.equal(result.data.account_created, true);
+  assert.equal(result.data.password_setup_email_sent, true);
+  assert.equal(JSON.stringify(result.data).includes('password'), true);
+  assert.equal(JSON.stringify(result.data).includes('rawToken'), false);
+  assert.equal(JSON.stringify(result.data).includes('plain'), false);
+  assert.equal(state.people.find((person) => person.email === 'new.visitor@example.com')?.credits, 3980);
+  assert.equal(state.notifications.booked.length, 1);
+  assert.equal(state.setupEmails[0].email, 'new.visitor@example.com');
+  assert.ok(state.setupEmails[0].tokenLength >= 20);
+});
+
+test('anonymous assistant cannot call participant private tools', async () => {
+  const state = actionState();
+  await assert.rejects(
+    () =>
+      executeAnonymousAssistantAction(
+        { authenticated: false, role: 'anonymous' },
+        { name: 'get_my_balance', arguments: {} },
+        { queryFn: state.query as any }
+      ),
+    (error) => error instanceof AssistantActionError && error.status === 403
+  );
+});
+
+test('participant assistant action reports own balance', async () => {
+  const state = actionState();
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'participant', person: { ...state.people[0], credits: String(state.people[0].credits) } as any },
+    { name: 'get_my_balance', arguments: { person_id: 102, role: 'admin' } },
+    { queryFn: state.query as any }
+  );
+
+  assert.deepEqual(result.data, { credits: '100' });
+});
+
+test('participant assistant action lists own bookings only', async () => {
+  const state = actionState({
+    enrolments: [
+      {
+        id: 701,
+        session_id: 301,
+        person_id: 101,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T12:00:00Z',
+        cancelled_at: null
+      },
+      {
+        id: 702,
+        session_id: 301,
+        person_id: 102,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T12:05:00Z',
+        cancelled_at: null
+      }
+    ]
+  });
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'participant', person: { ...state.people[0], credits: '100' } as any },
+    { name: 'get_my_bookings', arguments: { person_id: 102 } },
+    { queryFn: state.query as any }
+  );
+
+  assert.deepEqual((result.data.bookings as any[]).map((booking) => booking.enrolment_id), [701]);
+  assert.equal(JSON.stringify(result.data).includes('702'), false);
+});
+
+test('participant assistant action books an eligible session and deducts integer credits', async () => {
+  const state = actionState();
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'participant', person: { ...state.people[0], credits: '100' } as any },
+    { name: 'book_session', arguments: { session_id: 301, person_id: 102, role: 'admin' } },
+    {
+      queryFn: state.query as any,
+      withTransaction: state.withTransaction as any,
+      notifyParticipantBooked: state.notifyParticipantBooked,
+      now
+    }
+  );
+
+  assert.equal(result.data.status, 'active');
+  assert.equal(result.data.credits_charged, 20);
+  assert.equal(state.people[0].credits, 80);
+  assert.equal(state.notifications.booked.length, 1);
+});
+
+test('participant assistant action rejects full, conflicting and ineligible bookings', async () => {
+  const full = actionState({
+    enrolments: [
+      {
+        id: 701,
+        session_id: 301,
+        person_id: 102,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T12:00:00Z',
+        cancelled_at: null
+      },
+      {
+        id: 702,
+        session_id: 301,
+        person_id: 999,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T12:00:00Z',
+        cancelled_at: null
+      }
+    ]
+  });
+
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'participant', person: { ...full.people[0], credits: '100' } as any },
+        { name: 'book_session', arguments: { session_id: 301 } },
+        { queryFn: full.query as any, withTransaction: full.withTransaction as any }
+      ),
+    (error) => error instanceof AssistantActionError && /full/.test(error.message)
+  );
+
+  const conflicting = actionState({
+    sessions: [
+      {
+        id: 301,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-09-03T14:00:00Z',
+        ends_at: '2026-09-03T15:00:00Z',
+        seat_fee_credits: 20,
+        room_capacity: 3
+      },
+      {
+        id: 302,
+        coach_id: 201,
+        status: 'scheduled',
+        starts_at: '2026-09-03T14:30:00Z',
+        ends_at: '2026-09-03T15:30:00Z',
+        seat_fee_credits: 20,
+        room_capacity: 3
+      }
+    ],
+    enrolments: [
+      {
+        id: 701,
+        session_id: 302,
+        person_id: 101,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T12:00:00Z',
+        cancelled_at: null
+      }
+    ]
+  });
+
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'participant', person: { ...conflicting.people[0], credits: '100' } as any },
+        { name: 'book_session', arguments: { session_id: 301 } },
+        { queryFn: conflicting.query as any, withTransaction: conflicting.withTransaction as any }
+      ),
+    (error) => error instanceof AssistantActionError && /already booked/.test(error.message)
+  );
+
+  const ineligible = actionState({ sessions: [{ ...actionState().sessions[0], status: 'cancelled' }] });
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'participant', person: { ...ineligible.people[0], credits: '100' } as any },
+        { name: 'book_session', arguments: { session_id: 301 } },
+        { queryFn: ineligible.query as any, withTransaction: ineligible.withTransaction as any }
+      ),
+    (error) => error instanceof AssistantActionError && /scheduled/.test(error.message)
+  );
+});
+
+test('participant assistant action cancels own booking with existing refund policy', async () => {
+  const state = actionState({
+    enrolments: [
+      {
+        id: 701,
+        session_id: 301,
+        person_id: 101,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T12:00:00Z',
+        cancelled_at: null
+      }
+    ]
+  });
+  state.people[0].credits = 80;
+
+  const result = await executeAssistantAction(
+    { authenticated: true, role: 'participant', person: { ...state.people[0], credits: '80' } as any },
+    { name: 'cancel_booking', arguments: { session_id: 301, enrolment_id: 701 } },
+    {
+      queryFn: state.query as any,
+      withTransaction: state.withTransaction as any,
+      notifyParticipantCancelled: state.notifyParticipantCancelled,
+      now: new Date('2026-09-02T14:00:00Z')
+    }
+  );
+
+  assert.equal(result.data.status, 'cancelled');
+  assert.equal(result.data.credits_refunded_now, 10);
+  assert.equal(result.data.refund_percent, 0.5);
+  assert.equal(state.people[0].credits, 90);
+  assert.deepEqual(state.notifications.cancelled, [{ id: 701, refund: 10 }]);
+});
+
+test('participant assistant action cannot cancel another participant booking', async () => {
+  const state = actionState({
+    enrolments: [
+      {
+        id: 702,
+        session_id: 301,
+        person_id: 102,
+        status: 'active',
+        credits_charged: 20,
+        credits_refunded: 0,
+        enrolled_at: '2026-09-01T12:00:00Z',
+        cancelled_at: null
+      }
+    ]
+  });
+
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'participant', person: { ...state.people[0], credits: '100' } as any },
+        { name: 'cancel_booking', arguments: { session_id: 301, enrolment_id: 702, person_id: 102 } },
+        { queryFn: state.query as any, withTransaction: state.withTransaction as any, now }
+      ),
+    (error) => error instanceof AssistantActionError && error.status === 403
+  );
+});
+
+test('unregistered assistant tool names are rejected', async () => {
+  const state = actionState();
+  await assert.rejects(
+    () =>
+      executeAssistantAction(
+        { authenticated: true, role: 'participant', person: { ...state.people[0], credits: '100' } as any },
+        { name: 'run_sql', arguments: { sql: 'select * from person' } },
+        { queryFn: state.query as any }
+      ),
+    (error) => error instanceof AssistantActionError && error.status === 403
+  );
+});
+
+test('assistant endpoint executes deterministic stub action without network', async () => {
+  const state = actionState();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => {
+    throw new Error('network must not be called');
+  }) as any;
+
+  try {
+    const app = express();
+    app.use(express.json());
+    app.use(cookieParser());
+    app.use('/api/assistant', createAssistantRouter({
+      provider: new StubAssistantProvider(),
+      queryFn: state.query as any,
+      actionDeps: {
+        withTransaction: state.withTransaction as any,
+        notifyParticipantBooked: state.notifyParticipantBooked,
+        sendPasswordSetupEmail: state.sendPasswordSetupEmail,
+        now
+      }
+    }));
+
+    const server: Server = await new Promise((resolve) => {
+      const listening = app.listen(0, () => resolve(listening));
+    });
+
+    try {
+      const address = server.address() as AddressInfo;
+      const response = await postJson(
+        `http://127.0.0.1:${address.port}/api/assistant`,
+        { message: 'book session 301 with email visitor@example.com' }
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal((response.body as any).role, 'anonymous');
+      assert.match((response.body as any).response, /anonymous_book_session/);
+      assert.equal(JSON.stringify(response.body).includes('rawToken'), false);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => err ? reject(err) : resolve());
+      });
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('assistant endpoint rejects anonymous authenticated-only stub action', async () => {
+  const state = actionState();
+  const app = express();
+  app.use(express.json());
+  app.use(cookieParser());
+  app.use('/api/assistant', createAssistantRouter({
+    provider: new StubAssistantProvider(),
+    queryFn: state.query as any,
+    actionDeps: { withTransaction: state.withTransaction as any, now }
+  }));
+
+  const server: Server = await new Promise((resolve) => {
+    const listening = app.listen(0, () => resolve(listening));
+  });
+
+  try {
+    const address = server.address() as AddressInfo;
+    const response = await postJson(
+      `http://127.0.0.1:${address.port}/api/assistant`,
+      { message: 'what is my remaining credit balance?' }
+    );
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(response.body, { error: 'assistant tool get_my_balance is not available to this caller' });
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => err ? reject(err) : resolve());
+    });
+  }
 });

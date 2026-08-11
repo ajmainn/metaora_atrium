@@ -52,7 +52,7 @@ export async function publicSessionCatalogue(
   );
 }
 
-async function participantBookings(
+export async function participantBookings(
   queryFn: AssistantQueryFn,
   personId: number
 ): Promise<QueryResultRow[]> {
