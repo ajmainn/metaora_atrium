@@ -1,11 +1,23 @@
 import { PoolClient, QueryResultRow } from 'pg';
 import { roomFee, seatFee } from './credits';
 import { validateSessionSchedule } from './sessionCreation';
+import {
+  buildRoomReservations,
+  ensureReservationRoomsAvailable,
+  insertRoomReservations,
+  loadReservationRooms,
+  reservationCapacity,
+  RoomReservationError,
+  validateReservationRoomTypes
+} from './sessionRoomReservations';
 
 type RescheduleActor = { id: number; kind: 'coach' | 'admin' | 'participant' };
 
 type RescheduleInput = {
   room_id?: number;
+  second_teaching_room_id?: number | null;
+  lunch_room_id?: number | null;
+  intensive_split?: string | null;
   coach_id?: number;
   session_type?: string;
   starts_at?: string;
@@ -31,7 +43,13 @@ type SessionForReschedule = QueryResultRow & {
   seat_fee_credits: string | number;
 };
 
-type RoomRow = QueryResultRow & { id: number; name: string; capacity: number };
+type RoomRow = QueryResultRow & { id: number; name: string; capacity: number; room_type?: string };
+type ExistingReservationRow = QueryResultRow & {
+  room_id: number;
+  reservation_type: string;
+  starts_at: string | Date;
+  ends_at: string | Date;
+};
 type CoachRow = QueryResultRow & { id: number; credits: string | number };
 type ActiveEnrolment = QueryResultRow & {
   id: number;
@@ -52,6 +70,25 @@ function asInteger(value: unknown): number | null {
 
 function changed<T>(left: T, right: T): boolean {
   return String(left) !== String(right);
+}
+
+function minutesBetween(start: string | Date, end: string | Date): number {
+  return Math.round((new Date(end).getTime() - new Date(start).getTime()) / (60 * 1000));
+}
+
+function splitFromExistingReservations(reservations: ExistingReservationRow[]): string | undefined {
+  const first = reservations.find((reservation) => reservation.reservation_type === 'teaching_block_1');
+  const second = reservations.find((reservation) => reservation.reservation_type === 'teaching_block_2');
+  if (!first || !second) return undefined;
+  const split = `${minutesBetween(first.starts_at, first.ends_at)}-${minutesBetween(second.starts_at, second.ends_at)}`;
+  return split === '90-90' || split === '60-120' || split === '120-60' ? split : undefined;
+}
+
+function rethrowRoomReservationError(error: unknown): never {
+  if (error instanceof RoomReservationError) {
+    throw new SessionRescheduleError(error.status, error.message);
+  }
+  throw error;
 }
 
 export async function rescheduleSession(
@@ -86,7 +123,25 @@ export async function rescheduleSession(
     throw new SessionRescheduleError(403, 'forbidden');
   }
 
+  const existingReservations = await client.query<ExistingReservationRow>(
+    `select room_id, reservation_type, starts_at, ends_at
+       from session_room_reservation
+      where session_id = $1
+      order by starts_at, id`,
+    [sessionId]
+  );
+  const existingReservation = (type: string) =>
+    existingReservations.rows.find((reservation) => reservation.reservation_type === type);
+
   const roomId = input.room_id === undefined ? Number(existing.room_id) : asInteger(input.room_id);
+  const secondTeachingRoomId =
+    input.second_teaching_room_id === undefined || input.second_teaching_room_id === null
+      ? undefined
+      : asInteger(input.second_teaching_room_id);
+  const lunchRoomId =
+    input.lunch_room_id === undefined || input.lunch_room_id === null
+      ? undefined
+      : asInteger(input.lunch_room_id);
   const coachId =
     actor.kind === 'coach'
       ? actor.id
@@ -112,8 +167,8 @@ export async function rescheduleSession(
           })()
         : new Date(existing.ends_at).toISOString();
 
-  if (roomId === null || coachId === null) {
-    throw new SessionRescheduleError(400, 'room_id and coach_id must be valid ids');
+  if (roomId === null || coachId === null || secondTeachingRoomId === null || lunchRoomId === null) {
+    throw new SessionRescheduleError(400, 'room_id, coach_id, second_teaching_room_id and lunch_room_id must be valid ids');
   }
 
   const { startsAt, endsAt } = validateSessionSchedule(
@@ -128,16 +183,43 @@ export async function rescheduleSession(
     now
   );
 
+  let reservations;
+  try {
+    reservations = buildRoomReservations({
+      room_id: roomId,
+      second_teaching_room_id:
+        secondTeachingRoomId ??
+        (String(existing.session_type) === 'intensive'
+          ? Number(existingReservation('teaching_block_2')?.room_id ?? existing.room_id)
+          : undefined),
+      lunch_room_id:
+        lunchRoomId ??
+        (String(existing.session_type) === 'intensive'
+          ? Number(existingReservation('lunch')?.room_id)
+          : undefined),
+      session_type: sessionType,
+      startsAt,
+      endsAt,
+      intensive_split: input.intensive_split ?? splitFromExistingReservations(existingReservations.rows)
+    });
+  } catch (error) {
+    rethrowRoomReservationError(error);
+  }
+
   const newRoomFee = roomFee(sessionType);
   const newSeatFee = seatFee(sessionType);
   if (!Number.isInteger(newRoomFee) || !Number.isInteger(newSeatFee) || newRoomFee < 0 || newSeatFee < 0) {
     throw new SessionRescheduleError(400, 'session fees must be whole credits');
   }
 
-  const rooms = await client.query<RoomRow>('select id, name, capacity from room where id = $1', [roomId]);
-  if (rooms.rows.length === 0) {
-    throw new SessionRescheduleError(400, 'no such room');
+  let roomsById: Map<number, RoomRow>;
+  try {
+    roomsById = (await loadReservationRooms(client, reservations)) as Map<number, RoomRow>;
+    validateReservationRoomTypes(reservations, roomsById);
+  } catch (error) {
+    rethrowRoomReservationError(error);
   }
+  const primaryRoom = roomsById.get(roomId);
 
   const coaches = await client.query<CoachRow>(
     "select id, credits from person where id = $1 and kind = 'coach' and active = true for update",
@@ -156,23 +238,14 @@ export async function rescheduleSession(
     throw new SessionRescheduleError(409, 'a coach cannot enrol in their own session');
   }
 
-  if (activeEnrolments.rows.length > Number(rooms.rows[0].capacity)) {
+  if (activeEnrolments.rows.length > reservationCapacity(reservations, roomsById)) {
     throw new SessionRescheduleError(409, 'room capacity is too small for the active enrolments');
   }
 
-  const roomClashes = await client.query(
-    `select id
-       from session
-      where id <> $1
-        and room_id = $2
-        and status = 'scheduled'
-        and starts_at < $4
-        and ends_at > $3
-      limit 1`,
-    [sessionId, roomId, startsAt.toISOString(), endsAt.toISOString()]
-  );
-  if (roomClashes.rows.length > 0) {
-    throw new SessionRescheduleError(409, `${rooms.rows[0].name} is already booked for that time`);
+  try {
+    await ensureReservationRoomsAvailable(client, reservations, roomsById, sessionId);
+  } catch (error) {
+    rethrowRoomReservationError(error);
   }
 
   const coachTeachingClashes = await client.query(
@@ -288,8 +361,21 @@ export async function rescheduleSession(
     throw new SessionRescheduleError(409, 'only scheduled sessions can be rescheduled');
   }
 
+  await client.query('delete from session_room_reservation where session_id = $1', [sessionId]);
+  await insertRoomReservations(client, sessionId, reservations);
+
   return {
-    session: updated.rows[0],
+    session: {
+      ...updated.rows[0],
+      room_capacity: reservationCapacity(reservations, roomsById),
+      room_name: primaryRoom?.name,
+      room_reservations: reservations.map((reservation) => ({
+        room_id: reservation.room_id,
+        reservation_type: reservation.reservation_type,
+        starts_at: reservation.startsAt.toISOString(),
+        ends_at: reservation.endsAt.toISOString()
+      }))
+    },
     oldSession: existing,
     activeEnrolmentIds: activeEnrolments.rows.map((enrolment) => Number(enrolment.id)),
     changed: {

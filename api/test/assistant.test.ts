@@ -210,7 +210,7 @@ function actionState(overrides: {
   sessions?: ActionSession[];
   enrolments?: ActionEnrolment[];
   checkIns?: ActionCheckIn[];
-  rooms?: Array<{ id: number; name: string; capacity: number }>;
+  rooms?: Array<{ id: number; name: string; capacity: number; room_type?: string }>;
   insufficientDebitPersonIds?: number[];
 } = {}) {
   const peopleRows: ActionPerson[] = overrides.people || [
@@ -261,8 +261,9 @@ function actionState(overrides: {
   const enrolmentRows: ActionEnrolment[] = overrides.enrolments || [];
   const checkInRows: ActionCheckIn[] = overrides.checkIns || [];
   const rooms = overrides.rooms || [
-    { id: 1, name: 'Studio A', capacity: 2 },
-    { id: 2, name: 'Studio B', capacity: 8 }
+    { id: 1, name: 'Studio A', capacity: 2, room_type: 'teaching' },
+    { id: 2, name: 'Studio B', capacity: 8, room_type: 'teaching' },
+    { id: 13, name: 'Lunch Room 1', capacity: 10, room_type: 'lunch_dinner' }
   ];
   const notifications = {
     booked: [] as number[],
@@ -473,7 +474,7 @@ function actionState(overrides: {
         };
       }
 
-      if (text.includes('r.capacity as room_capacity') && text.includes('group by s.id')) {
+      if (text.includes('room_capacity') && text.includes('places_remaining') && text.includes('group by s.id')) {
         return {
           rows: sessionRows
             .filter((session) => session.status === 'scheduled')
@@ -534,6 +535,17 @@ function actionState(overrides: {
       if (text.includes('from session s') && text.includes('where s.id = $1') && text.includes('for update of s')) {
         const session = sessionRows.find((row) => row.id === params[0]);
         return { rows: session ? [{ ...session }] : [], rowCount: session ? 1 : 0 };
+      }
+
+      if (text.includes('from session_room_reservation') && text.includes('where session_id = $1')) {
+        return { rows: [], rowCount: 0 };
+      }
+
+      if (text.startsWith('select id, name, capacity, room_type from room where id = any')) {
+        return {
+          rows: rooms.filter((room) => (params[0] as number[]).includes(room.id)),
+          rowCount: rooms.length
+        };
       }
 
       if (text.startsWith('select id, name, capacity from room')) {
@@ -603,6 +615,17 @@ function actionState(overrides: {
       if (text.includes('from session') && text.includes('coach_id = $1') && text.includes('limit 1')) {
         const clash = sessionRows.find(
           (row) => row.coach_id === params[0] && row.status === 'scheduled' && overlaps(row, params[1] as string, params[2] as string)
+        );
+        return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
+      }
+
+      if (text.includes('from session_room_reservation')) {
+        const clash = sessionRows.find(
+          (row) =>
+            row.id !== params[3] &&
+            (row.room_id || 1) === params[0] &&
+            row.status === 'scheduled' &&
+            overlaps(row, params[1] as string, params[2] as string)
         );
         return { rows: clash ? [{ id: clash.id }] : [], rowCount: clash ? 1 : 0 };
       }
@@ -759,6 +782,14 @@ function actionState(overrides: {
         return { rows: [{ ...session }], rowCount: 1 };
       }
 
+      if (text.startsWith('delete from session_room_reservation')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (text.startsWith('insert into session_room_reservation')) {
+        return { rows: [], rowCount: 1 };
+      }
+
       return { rows: [], rowCount: 0 };
     }
   };
@@ -833,7 +864,7 @@ function fakeQuery() {
         }));
       }
 
-      if (text.includes('r.capacity as room_capacity')) {
+      if (text.includes('room_capacity')) {
         return publicRows.map((row) => ({ ...row }));
       }
 
@@ -2040,6 +2071,7 @@ test('coach assistant reschedule applies fee deltas and domain validation', asyn
       arguments: {
         session_id: 301,
         session_type: 'intensive',
+        lunch_room_id: 13,
         ends_at: '2026-09-07T17:30:00Z'
       }
     },

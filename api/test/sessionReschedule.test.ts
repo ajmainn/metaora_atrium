@@ -26,7 +26,7 @@ type Enrolment = {
 
 type State = {
   session?: Session;
-  rooms?: Array<{ id: number; name: string; capacity: number }>;
+  rooms?: Array<{ id: number; name: string; capacity: number; room_type?: string }>;
   coaches?: Array<{ id: number; credits: number; active?: boolean }>;
   enrolments?: Enrolment[];
   otherSessions?: Session[];
@@ -58,7 +58,8 @@ function fakeClient(state: State = {}) {
   const rooms = state.rooms || [
     { id: 1, name: 'Room 1', capacity: 8 },
     { id: 2, name: 'Room 2', capacity: 8 },
-    { id: 3, name: 'Small Room', capacity: 1 }
+    { id: 3, name: 'Small Room', capacity: 1 },
+    { id: 13, name: 'Lunch Room 1', capacity: 10, room_type: 'lunch_dinner' }
   ];
   const coaches = state.coaches || [
     { id: 20, credits: 200 },
@@ -81,8 +82,12 @@ function fakeClient(state: State = {}) {
         return session.id === params[0] ? { rows: [session], rowCount: 1 } : { rows: [], rowCount: 0 };
       }
 
-      if (text.startsWith('select id, name, capacity from room')) {
-        return { rows: rooms.filter((room) => room.id === params[0]), rowCount: 1 };
+      if (text.includes('from session_room_reservation') && text.includes('where session_id = $1')) {
+        return { rows: [], rowCount: 0 };
+      }
+
+      if (text.startsWith('select id, name, capacity, room_type from room where id = any')) {
+        return { rows: rooms.filter((room) => (params[0] as number[]).includes(room.id)), rowCount: 1 };
       }
 
       if (text.includes("kind = 'coach'")) {
@@ -103,10 +108,14 @@ function fakeClient(state: State = {}) {
         };
       }
 
-      if (text.includes('from session') && text.includes('room_id = $2')) {
+      if (text.includes('from session_room_reservation')) {
         return {
           rows: (state.otherSessions || []).filter(
-            (other) => other.id !== params[0] && other.room_id === params[1] && other.status === 'scheduled' && overlaps(other, params[2] as string, params[3] as string)
+            (other) =>
+              other.id !== params[3] &&
+              other.room_id === params[0] &&
+              other.status === 'scheduled' &&
+              overlaps(other, params[1] as string, params[2] as string)
           ),
           rowCount: 1
         };
@@ -170,6 +179,14 @@ function fakeClient(state: State = {}) {
         };
       }
 
+      if (text.startsWith('delete from session_room_reservation')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (text.startsWith('insert into session_room_reservation')) {
+        return { rows: [], rowCount: 1 };
+      }
+
       return { rows: [], rowCount: 0 };
     }
   };
@@ -214,7 +231,7 @@ test('successful type change adjusts coach and participant fees transactionally'
     client as any,
     7,
     { id: 20, kind: 'coach' },
-    { session_type: 'intensive', ends_at: '2026-07-06T17:30:00Z' },
+    { session_type: 'intensive', lunch_room_id: 13, ends_at: '2026-07-06T17:30:00Z' },
     NOW
   );
 
@@ -262,7 +279,7 @@ test('administrator cannot reassign a session to an actively enrolled attendee',
 test('participant fee increase failure rejects before session update', async () => {
   await assertRejectsReschedule(
     { insufficientDebitPersonIds: [30] },
-    { session_type: 'intensive', ends_at: '2026-07-06T17:30:00Z' },
+    { session_type: 'intensive', lunch_room_id: 13, ends_at: '2026-07-06T17:30:00Z' },
     /insufficient credits/
   );
 });
@@ -365,7 +382,7 @@ test('intensive lunch occupancy is covered by full interval conflict checks', as
         }
       ]
     },
-    { session_type: 'intensive', ends_at: '2026-07-06T17:30:00Z' },
+    { session_type: 'intensive', lunch_room_id: 13, ends_at: '2026-07-06T17:30:00Z' },
     /participant has a conflicting/
   );
 });

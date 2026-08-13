@@ -37,9 +37,9 @@ export async function publicSessionCatalogue(
             s.ends_at,
             s.seat_fee_credits,
             r.name as room_name,
-            r.capacity as room_capacity,
+            least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity,
             count(e.id)::int as enrolled_count,
-            (r.capacity - count(e.id))::int as places_remaining
+            (least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) - count(e.id))::int as places_remaining
        from session s
        join room r on r.id = s.room_id
        left join enrolment e on e.session_id = s.id and e.status = 'active'
@@ -97,7 +97,7 @@ async function coachSessions(
             s.seat_fee_credits,
             s.created_at,
             r.name as room_name,
-            r.capacity as room_capacity,
+            least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity,
             count(e.id)::int as enrolled_count
        from session s
        join room r on r.id = s.room_id
@@ -173,11 +173,11 @@ export async function adminSessions(
             s.seat_fee_credits,
             s.created_at,
             r.name as room_name,
-            r.capacity as room_capacity,
+            least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity,
             c.full_name as coach_name,
             c.email as coach_email,
             count(e.id)::int as enrolled_count,
-            (r.capacity - count(e.id))::int as places_remaining
+            (least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) - count(e.id))::int as places_remaining
        from session s
        join room r on r.id = s.room_id
        join person c on c.id = s.coach_id

@@ -93,11 +93,11 @@ export async function adminCalendarSessions(
                     s.seat_fee_credits,
                     s.created_at,
                     r.name as room_name,
-                    r.capacity as room_capacity,
+                    least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity,
                     c.full_name as coach_name,
                     c.email as coach_email,
                     count(e.id)::int as enrolled_count,
-                    (r.capacity - count(e.id))::int as places_remaining
+                    (least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) - count(e.id))::int as places_remaining
                from session s
                join room r on r.id = s.room_id
                join person c on c.id = s.coach_id
@@ -174,9 +174,9 @@ router.get('/', async (req, res) => {
                       s.ends_at,
                       s.seat_fee_credits,
                       r.name as room_name,
-                      r.capacity as room_capacity,
+                      least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity,
                       count(e.id)::int as enrolled_count,
-                      (r.capacity - count(e.id))::int as places_remaining
+                      (least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) - count(e.id))::int as places_remaining
                  from session s
                  join room r on r.id = s.room_id
                  left join enrolment e on e.session_id = s.id and e.status = 'active'
@@ -244,7 +244,8 @@ router.get('/dashboard', requireSession, async (_req, res) => {
       const ownSessions = await query(
         `select s.id, s.room_id, s.discipline, s.session_type, s.status, s.starts_at, s.ends_at,
                 s.seat_fee_credits, r.name as room_name,
-                count(e.id)::int as enrolled_count
+                count(e.id)::int as enrolled_count,
+                least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity
            from session s
            join room r on r.id = s.room_id
            left join enrolment e on e.session_id = s.id and e.status = 'active'
@@ -396,11 +397,29 @@ router.post('/', requireSession, requireRole('admin', 'coach'), async (req, res)
       res.status(400).json({ error: 'room_id and coach_id must be valid ids' });
       return;
     }
+    const secondTeachingRoomId =
+      body.second_teaching_room_id === undefined || body.second_teaching_room_id === null || body.second_teaching_room_id === ''
+        ? undefined
+        : Number(body.second_teaching_room_id);
+    const lunchRoomId =
+      body.lunch_room_id === undefined || body.lunch_room_id === null || body.lunch_room_id === ''
+        ? undefined
+        : Number(body.lunch_room_id);
+    if (
+      (secondTeachingRoomId !== undefined && !Number.isInteger(secondTeachingRoomId)) ||
+      (lunchRoomId !== undefined && !Number.isInteger(lunchRoomId))
+    ) {
+      res.status(400).json({ error: 'second_teaching_room_id and lunch_room_id must be valid ids' });
+      return;
+    }
 
     const created = await withTransaction(
       (client) =>
         createSessionBooking(client, {
           room_id: roomId,
+          second_teaching_room_id: secondTeachingRoomId,
+          lunch_room_id: lunchRoomId,
+          intensive_split: typeof body.intensive_split === 'string' ? body.intensive_split : undefined,
           coach_id: coachId,
           discipline,
           session_type,

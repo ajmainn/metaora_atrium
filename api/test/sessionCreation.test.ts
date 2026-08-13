@@ -19,7 +19,7 @@ type ExistingEnrolment = {
 };
 
 type FakeState = {
-  rooms?: Array<{ id: number; name: string; capacity: number }>;
+  rooms?: Array<{ id: number; name: string; capacity: number; room_type?: string }>;
   coachCredits?: number;
   sessions?: ExistingSession[];
   enrolments?: ExistingEnrolment[];
@@ -33,7 +33,10 @@ function overlaps(existing: ExistingSession, start: string, end: string) {
 
 function fakeClient(state: FakeState = {}) {
   const calls: Array<{ text: string; params: unknown[] }> = [];
-  const rooms = state.rooms || [{ id: 1, name: 'Room 1', capacity: 8 }];
+  const rooms = state.rooms || [
+    { id: 1, name: 'Room 1', capacity: 8, room_type: 'teaching' },
+    { id: 13, name: 'Lunch Room 1', capacity: 10, room_type: 'lunch_dinner' }
+  ];
   const sessions = state.sessions || [];
   const enrolments = state.enrolments || [];
   const coachCredits = state.coachCredits ?? 200;
@@ -43,18 +46,21 @@ function fakeClient(state: FakeState = {}) {
     async query(text: string, params: unknown[] = []) {
       calls.push({ text, params });
 
-      if (text.startsWith('select id, name, capacity from room')) {
-        return { rows: rooms.filter((room) => room.id === params[0]), rowCount: 1 };
+      if (text.startsWith('select id, name, capacity, room_type from room where id = any')) {
+        return { rows: rooms.filter((room) => (params[0] as number[]).includes(room.id)), rowCount: 1 };
       }
 
       if (text.includes("kind = 'coach'")) {
         return { rows: [{ id: params[0], credits: String(coachCredits) }], rowCount: 1 };
       }
 
-      if (text.includes('from session') && text.includes('room_id = $1')) {
+      if (text.includes('from session_room_reservation')) {
         return {
           rows: sessions.filter(
-            (session) => session.room_id === params[0] && session.status === 'scheduled' && overlaps(session, params[1] as string, params[2] as string)
+            (session) =>
+              session.room_id === params[0] &&
+              session.status === 'scheduled' &&
+              overlaps(session, params[1] as string, params[2] as string)
           ),
           rowCount: 1
         };
@@ -84,6 +90,10 @@ function fakeClient(state: FakeState = {}) {
 
       if (text.startsWith('insert into session')) {
         return { rows: [{ id: 99, room_id: params[0], coach_id: params[1] }], rowCount: 1 };
+      }
+
+      if (text.startsWith('insert into session_room_reservation')) {
+        return { rows: [], rowCount: 1 };
       }
 
       if (text.startsWith('update person set credits')) {
@@ -285,11 +295,75 @@ test('short, standard and intensive durations are enforced', async () => {
   for (const [session_type, starts_at, ends_at] of cases) {
     const created = await createSessionBooking(
       fakeClient() as any,
-      { room_id: 1, coach_id: 2, discipline: 'Math', session_type, starts_at, ends_at },
+      { room_id: 1, lunch_room_id: session_type === 'intensive' ? 13 : undefined, coach_id: 2, discipline: 'Math', session_type, starts_at, ends_at },
       NOW
     );
     assert.equal(created.id, 99);
   }
 
-  await assertRejectsBooking({ session_type: 'intensive', ends_at: '2026-07-06T14:00:00Z' }, /required duration/);
+  await assertRejectsBooking({ session_type: 'intensive', lunch_room_id: 13, ends_at: '2026-07-06T14:00:00Z' }, /required duration/);
+});
+
+test('intensive booking creates teaching, lunch and second teaching reservations', async () => {
+  const client = fakeClient();
+  const created = await createSessionBooking(
+    client as any,
+    {
+      room_id: 1,
+      second_teaching_room_id: 1,
+      lunch_room_id: 13,
+      intensive_split: '90-90',
+      coach_id: 2,
+      discipline: 'Math',
+      session_type: 'intensive',
+      starts_at: '2026-07-06T11:00:00Z',
+      ends_at: '2026-07-06T14:30:00Z'
+    },
+    NOW
+  );
+
+  assert.equal(created.room_reservations.length, 3);
+  assert.deepEqual(
+    created.room_reservations.map((reservation: any) => reservation.reservation_type),
+    ['teaching_block_1', 'lunch', 'teaching_block_2']
+  );
+});
+
+test('teaching room is released during intensive lunch', async () => {
+  const client = fakeClient({
+    sessions: [
+      {
+        id: 10,
+        room_id: 1,
+        coach_id: 3,
+        status: 'scheduled',
+        starts_at: '2026-07-06T12:30:00Z',
+        ends_at: '2026-07-06T13:00:00Z'
+      }
+    ]
+  });
+
+  const created = await createSessionBooking(
+    client as any,
+    {
+      room_id: 1,
+      lunch_room_id: 13,
+      coach_id: 2,
+      discipline: 'Math',
+      session_type: 'intensive',
+      starts_at: '2026-07-06T11:00:00Z',
+      ends_at: '2026-07-06T14:30:00Z'
+    },
+    NOW
+  );
+
+  assert.equal(created.id, 99);
+});
+
+test('lunch rooms cannot be used for teaching and teaching rooms cannot be used for lunch', async () => {
+  await assertRejectsBooking({ room_id: 13 }, /teaching reservations/);
+  await assertRejectsBooking(
+    { session_type: 'intensive', lunch_room_id: 1, ends_at: '2026-07-06T14:30:00Z' },
+    /lunch reservations/
+  );
 });

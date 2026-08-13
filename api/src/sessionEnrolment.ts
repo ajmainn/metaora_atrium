@@ -49,7 +49,16 @@ export async function enrolInSession(
 ) {
   const sessions = await client.query<SessionForEnrolment>(
     `select s.id, s.coach_id, s.status, s.starts_at, s.ends_at, s.seat_fee_credits,
-            r.capacity as room_capacity
+            least(
+              r.capacity,
+              coalesce(
+                (select min(rr.capacity)
+                   from session_room_reservation srr
+                   join room rr on rr.id = srr.room_id
+                  where srr.session_id = s.id),
+                r.capacity
+              )
+            ) as room_capacity
        from session s
        join room r on r.id = s.room_id
       where s.id = $1

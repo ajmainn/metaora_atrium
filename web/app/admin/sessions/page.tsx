@@ -12,7 +12,7 @@ import {
   startOfCentreWeekKey
 } from '../../calendarTime';
 
-type Room = { id: number; name: string; capacity: number };
+type Room = { id: number; name: string; capacity: number; room_type?: string };
 type Person = { id: number; full_name: string; email: string; kind: string };
 type Session = {
   id: number;
@@ -80,6 +80,9 @@ export default function AdminSessions() {
   const [discipline, setDiscipline] = useState(disciplines[0]);
   const [sessionType, setSessionType] = useState(sessionTypes[1]);
   const [roomId, setRoomId] = useState('');
+  const [secondTeachingRoomId, setSecondTeachingRoomId] = useState('');
+  const [lunchRoomId, setLunchRoomId] = useState('');
+  const [intensiveSplit, setIntensiveSplit] = useState('90-90');
   const [coachId, setCoachId] = useState('');
 
   const days = [0, 1, 2, 3, 4, 5, 6].map((offset) => addDaysToDateKey(weekStartKey, offset));
@@ -144,12 +147,16 @@ export default function AdminSessions() {
 
     setError('');
     try {
+      const isIntensive = sessionType === 'intensive';
       const res = await fetch(`${apiBaseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           room_id: Number(roomId),
+          second_teaching_room_id: isIntensive && secondTeachingRoomId ? Number(secondTeachingRoomId) : undefined,
+          lunch_room_id: isIntensive && lunchRoomId ? Number(lunchRoomId) : undefined,
+          intensive_split: isIntensive ? intensiveSplit : undefined,
           coach_id: Number(coachId),
           discipline,
           session_type: sessionType,
@@ -169,6 +176,8 @@ export default function AdminSessions() {
   }
 
   if (!authorized) return <main><p className="state">Loading...</p></main>;
+  const teachingRooms = rooms.filter((room) => (room.room_type || 'teaching') === 'teaching');
+  const lunchRooms = rooms.filter((room) => room.room_type === 'lunch_dinner');
 
   return (
     <main className="dashboard-page">
@@ -295,13 +304,47 @@ export default function AdminSessions() {
           <span>Room</span>
           <select value={roomId} onChange={(event) => setRoomId(event.target.value)} required>
             <option value="">Select a room</option>
-            {rooms.map((room) => (
+            {teachingRooms.map((room) => (
               <option key={room.id} value={room.id}>
                 {room.name}
               </option>
             ))}
           </select>
         </label>
+        {sessionType === 'intensive' ? (
+          <>
+            <label>
+              <span>Lunch room</span>
+              <select value={lunchRoomId} onChange={(event) => setLunchRoomId(event.target.value)} required>
+                <option value="">Select a lunch room</option>
+                {lunchRooms.map((room) => (
+                  <option key={room.id} value={room.id}>
+                    {room.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Second room</span>
+              <select value={secondTeachingRoomId} onChange={(event) => setSecondTeachingRoomId(event.target.value)}>
+                <option value="">Same as first room</option>
+                {teachingRooms.map((room) => (
+                  <option key={room.id} value={room.id}>
+                    {room.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Split</span>
+              <select value={intensiveSplit} onChange={(event) => setIntensiveSplit(event.target.value)}>
+                <option value="90-90">90 / 90</option>
+                <option value="60-120">60 / 120</option>
+                <option value="120-60">120 / 60</option>
+              </select>
+            </label>
+          </>
+        ) : null}
         <label>
           <span>Coach</span>
           <select value={coachId} onChange={(event) => setCoachId(event.target.value)} required>

@@ -273,6 +273,9 @@ function optionalIntArg(args: Record<string, unknown>, key: string): number | un
 function rescheduleInput(args: Record<string, unknown>, includeCoach: boolean) {
   return {
     room_id: optionalIntArg(args, 'room_id'),
+    second_teaching_room_id: optionalIntArg(args, 'second_teaching_room_id'),
+    lunch_room_id: optionalIntArg(args, 'lunch_room_id'),
+    intensive_split: stringArg(args, 'intensive_split'),
     coach_id: includeCoach ? optionalIntArg(args, 'coach_id') : undefined,
     session_type: stringArg(args, 'session_type'),
     starts_at: stringArg(args, 'starts_at'),
@@ -312,9 +315,9 @@ async function coachSessionsForAction(queryFn: AssistantQueryFn, coachId: number
             s.room_fee_credits,
             s.seat_fee_credits,
             r.name as room_name,
-            r.capacity as room_capacity,
+            least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity,
             count(e.id)::int as enrolled_count,
-            (r.capacity - count(e.id))::int as places_remaining
+            (least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) - count(e.id))::int as places_remaining
        from session s
        join room r on r.id = s.room_id
        left join enrolment e on e.session_id = s.id and e.status = 'active'
@@ -343,7 +346,7 @@ async function coachSessionDetails(queryFn: AssistantQueryFn, coachId: number, s
             s.room_fee_credits,
             s.seat_fee_credits,
             r.name as room_name,
-            r.capacity as room_capacity
+            least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity
        from session s
        join room r on r.id = s.room_id
       where s.id = $1 and s.coach_id = $2`,
@@ -414,7 +417,7 @@ async function adminSessionDetails(queryFn: AssistantQueryFn, sessionId: number)
             s.room_fee_credits,
             s.seat_fee_credits,
             r.name as room_name,
-            r.capacity as room_capacity,
+            least(r.capacity, coalesce((select min(rr.capacity) from session_room_reservation srr join room rr on rr.id = srr.room_id where srr.session_id = s.id), r.capacity)) as room_capacity,
             c.full_name as coach_name,
             c.email as coach_email
        from session s

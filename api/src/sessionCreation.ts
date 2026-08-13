@@ -1,5 +1,14 @@
 import { PoolClient, QueryResultRow } from 'pg';
 import { roomFee, seatFee } from './credits';
+import {
+  buildRoomReservations,
+  ensureReservationRoomsAvailable,
+  insertRoomReservations,
+  loadReservationRooms,
+  reservationCapacity,
+  RoomReservationError,
+  validateReservationRoomTypes
+} from './sessionRoomReservations';
 
 const CENTRE_TIME_ZONE = 'America/New_York';
 const MIN_BOOKING_NOTICE_MS = 48 * 60 * 60 * 1000;
@@ -11,6 +20,9 @@ const SESSION_DURATIONS_MS: Record<string, number> = {
 
 export type CreateSessionInput = {
   room_id: number;
+  second_teaching_room_id?: number | null;
+  lunch_room_id?: number | null;
+  intensive_split?: string | null;
   coach_id: number;
   discipline: string;
   session_type: string;
@@ -22,6 +34,7 @@ type Room = QueryResultRow & {
   id: number;
   name: string;
   capacity: number;
+  room_type?: string;
 };
 
 type Coach = QueryResultRow & {
@@ -33,6 +46,13 @@ export class SessionCreationError extends Error {
   constructor(public status: number, message: string) {
     super(message);
   }
+}
+
+function rethrowRoomReservationError(error: unknown): never {
+  if (error instanceof RoomReservationError) {
+    throw new SessionCreationError(error.status, error.message);
+  }
+  throw error;
 }
 
 function localParts(date: Date) {
@@ -101,13 +121,29 @@ export async function createSessionBooking(
   const { startsAt, endsAt } = validateSessionSchedule(input, now);
   const fee = roomFee(input.session_type);
   const seat = seatFee(input.session_type);
-
-  const rooms = await client.query<Room>('select id, name, capacity from room where id = $1', [
-    input.room_id
-  ]);
-  if (rooms.rows.length === 0) {
-    throw new SessionCreationError(400, 'no such room');
+  let reservations;
+  try {
+    reservations = buildRoomReservations({
+      room_id: input.room_id,
+      second_teaching_room_id: input.second_teaching_room_id,
+      lunch_room_id: input.lunch_room_id,
+      session_type: input.session_type,
+      startsAt,
+      endsAt,
+      intensive_split: input.intensive_split
+    });
+  } catch (error) {
+    rethrowRoomReservationError(error);
   }
+
+  let roomsById: Map<number, Room>;
+  try {
+    roomsById = (await loadReservationRooms(client, reservations)) as Map<number, Room>;
+    validateReservationRoomTypes(reservations, roomsById);
+  } catch (error) {
+    rethrowRoomReservationError(error);
+  }
+  const primaryRoom = roomsById.get(input.room_id);
 
   const coaches = await client.query<Coach>(
     "select id, credits from person where id = $1 and kind = 'coach' and active = true for update",
@@ -121,18 +157,10 @@ export async function createSessionBooking(
     throw new SessionCreationError(409, 'coach has insufficient credits');
   }
 
-  const roomClashes = await client.query(
-    `select id, starts_at, ends_at
-       from session
-      where room_id = $1
-        and status = 'scheduled'
-        and starts_at < $3
-        and ends_at > $2
-      limit 1`,
-    [input.room_id, startsAt.toISOString(), endsAt.toISOString()]
-  );
-  if (roomClashes.rows.length > 0) {
-    throw new SessionCreationError(409, `${rooms.rows[0].name} is already booked for that time`);
+  try {
+    await ensureReservationRoomsAvailable(client, reservations, roomsById);
+  } catch (error) {
+    rethrowRoomReservationError(error);
   }
 
   const coachTeachingClashes = await client.query(
@@ -183,6 +211,8 @@ export async function createSessionBooking(
     ]
   );
 
+  await insertRoomReservations(client, Number(inserted.rows[0].id), reservations);
+
   const deduction = await client.query('update person set credits = credits - $1 where id = $2 and credits >= $1 returning credits', [
     fee,
     input.coach_id
@@ -191,5 +221,15 @@ export async function createSessionBooking(
     throw new SessionCreationError(409, 'coach has insufficient credits');
   }
 
-  return inserted.rows[0];
+  return {
+    ...inserted.rows[0],
+    room_capacity: reservationCapacity(reservations, roomsById),
+    room_name: primaryRoom?.name,
+    room_reservations: reservations.map((reservation) => ({
+      room_id: reservation.room_id,
+      reservation_type: reservation.reservation_type,
+      starts_at: reservation.startsAt.toISOString(),
+      ends_at: reservation.endsAt.toISOString()
+    }))
+  };
 }

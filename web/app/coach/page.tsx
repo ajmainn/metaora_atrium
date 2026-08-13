@@ -8,7 +8,7 @@ import PaginationControls from '../PaginationControls';
 const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:4000';
 
 type Person = { full_name: string; email: string; kind: string; credits: string };
-type Room = { id: number; name: string; capacity: number };
+type Room = { id: number; name: string; capacity: number; room_type?: string };
 type Attendee = {
   enrolment_id: number;
   status: string;
@@ -58,8 +58,27 @@ type PublicSession = {
 };
 type Dashboard = { own_sessions: OwnSession[]; attending: AttendingSession[]; busy: BusySession[] };
 type CoachView = 'calendar' | 'teaching' | 'create' | 'available' | 'attending' | 'busy';
-type RescheduleDraft = { date: string; startTime: string; endTime: string; roomId: string; sessionType: string };
-type CreateDraft = { date: string; startTime: string; endTime: string; discipline: string; sessionType: string; roomId: string };
+type RescheduleDraft = {
+  date: string;
+  startTime: string;
+  endTime: string;
+  roomId: string;
+  secondTeachingRoomId: string;
+  lunchRoomId: string;
+  intensiveSplit: string;
+  sessionType: string;
+};
+type CreateDraft = {
+  date: string;
+  startTime: string;
+  endTime: string;
+  discipline: string;
+  sessionType: string;
+  roomId: string;
+  secondTeachingRoomId: string;
+  lunchRoomId: string;
+  intensiveSplit: string;
+};
 
 const typeLabels: Record<string, string> = { short: 'Short', standard: 'Standard', intensive: 'Intensive' };
 const disciplines = ['fitness', 'lifestyle', 'financial', 'nutrition', 'career', 'mindfulness'];
@@ -86,6 +105,9 @@ function draftFor(session: OwnSession): RescheduleDraft {
     startTime: centreInputTime(session.starts_at),
     endTime: centreInputTime(session.ends_at),
     roomId: String(session.room_id),
+    secondTeachingRoomId: String(session.room_id),
+    lunchRoomId: '',
+    intensiveSplit: '90-90',
     sessionType: session.session_type
   };
 }
@@ -163,7 +185,10 @@ export default function CoachDashboard() {
     endTime: '',
     discipline: disciplines[0],
     sessionType: 'standard',
-    roomId: ''
+    roomId: '',
+    secondTeachingRoomId: '',
+    lunchRoomId: '',
+    intensiveSplit: '90-90'
   });
 
   async function loadData() {
@@ -239,12 +264,16 @@ export default function CoachDashboard() {
     setBusy(true);
     setError('');
     try {
+      const isIntensive = draft.sessionType === 'intensive';
       const res = await fetch(`${apiBaseUrl}/api/sessions/${session.id}/reschedule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           room_id: Number(draft.roomId),
+          second_teaching_room_id: isIntensive && draft.secondTeachingRoomId ? Number(draft.secondTeachingRoomId) : undefined,
+          lunch_room_id: isIntensive && draft.lunchRoomId ? Number(draft.lunchRoomId) : undefined,
+          intensive_split: isIntensive ? draft.intensiveSplit : undefined,
           session_type: draft.sessionType,
           starts_at: centreLocalDateTimeToIso(draft.date, draft.startTime),
           ends_at: centreLocalDateTimeToIso(draft.date, draft.endTime)
@@ -268,12 +297,16 @@ export default function CoachDashboard() {
     setBusy(true);
     setError('');
     try {
+      const isIntensive = createDraft.sessionType === 'intensive';
       const res = await fetch(`${apiBaseUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           room_id: Number(createDraft.roomId),
+          second_teaching_room_id: isIntensive && createDraft.secondTeachingRoomId ? Number(createDraft.secondTeachingRoomId) : undefined,
+          lunch_room_id: isIntensive && createDraft.lunchRoomId ? Number(createDraft.lunchRoomId) : undefined,
+          intensive_split: isIntensive ? createDraft.intensiveSplit : undefined,
           discipline: createDraft.discipline,
           session_type: createDraft.sessionType,
           starts_at: centreLocalDateTimeToIso(createDraft.date, createDraft.startTime),
@@ -290,7 +323,10 @@ export default function CoachDashboard() {
         endTime: '',
         discipline: disciplines[0],
         sessionType: 'standard',
-        roomId: ''
+        roomId: '',
+        secondTeachingRoomId: '',
+        lunchRoomId: '',
+        intensiveSplit: '90-90'
       });
       setPage(0);
       await loadData();
@@ -359,6 +395,8 @@ export default function CoachDashboard() {
     (session) => session.places_remaining > 0 && !ownSessionIds.has(session.id) && !attendingSessionIds.has(session.id)
   );
   const visibleAvailable = availableSessions.slice(page * pageSize, (page + 1) * pageSize);
+  const teachingRooms = rooms.filter((room) => (room.room_type || 'teaching') === 'teaching');
+  const lunchRooms = rooms.filter((room) => room.room_type === 'lunch_dinner');
 
   function selectView(nextView: CoachView) {
     setView(nextView);
@@ -515,11 +553,66 @@ export default function CoachDashboard() {
                           }))
                         }
                       >
-                        {rooms.map((room) => (
+                        {teachingRooms.map((room) => (
                           <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>
                         ))}
                       </select>
                     </label>
+                    {(drafts[session.id] || draftFor(session)).sessionType === 'intensive' ? (
+                      <>
+                        <label>
+                          <span>Lunch room</span>
+                          <select
+                            value={(drafts[session.id] || draftFor(session)).lunchRoomId}
+                            onChange={(event) =>
+                              setDrafts((current) => ({
+                                ...current,
+                                [session.id]: { ...(current[session.id] || draftFor(session)), lunchRoomId: event.target.value }
+                              }))
+                            }
+                            required
+                          >
+                            <option value="">Select a lunch room</option>
+                            {lunchRooms.map((room) => (
+                              <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Second room</span>
+                          <select
+                            value={(drafts[session.id] || draftFor(session)).secondTeachingRoomId}
+                            onChange={(event) =>
+                              setDrafts((current) => ({
+                                ...current,
+                                [session.id]: { ...(current[session.id] || draftFor(session)), secondTeachingRoomId: event.target.value }
+                              }))
+                            }
+                          >
+                            <option value="">Same as first room</option>
+                            {teachingRooms.map((room) => (
+                              <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Split</span>
+                          <select
+                            value={(drafts[session.id] || draftFor(session)).intensiveSplit}
+                            onChange={(event) =>
+                              setDrafts((current) => ({
+                                ...current,
+                                [session.id]: { ...(current[session.id] || draftFor(session)), intensiveSplit: event.target.value }
+                              }))
+                            }
+                          >
+                            <option value="90-90">90 / 90</option>
+                            <option value="60-120">60 / 120</option>
+                            <option value="120-60">120 / 60</option>
+                          </select>
+                        </label>
+                      </>
+                    ) : null}
                     <div className="form-actions">
                       <button className="button-secondary" type="button" disabled={busy} onClick={() => setReschedulingId(null)}>Close</button>
                       <button type="button" disabled={busy} onClick={() => rescheduleSession(session)}>Save changes</button>
@@ -596,9 +689,35 @@ export default function CoachDashboard() {
             <span>Room</span>
             <select value={createDraft.roomId} onChange={(event) => setCreateDraft((current) => ({ ...current, roomId: event.target.value }))} required>
               <option value="">Select a room</option>
-              {rooms.map((room) => <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>)}
+              {teachingRooms.map((room) => <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>)}
             </select>
           </label>
+          {createDraft.sessionType === 'intensive' ? (
+            <>
+              <label>
+                <span>Lunch room</span>
+                <select value={createDraft.lunchRoomId} onChange={(event) => setCreateDraft((current) => ({ ...current, lunchRoomId: event.target.value }))} required>
+                  <option value="">Select a lunch room</option>
+                  {lunchRooms.map((room) => <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Second room</span>
+                <select value={createDraft.secondTeachingRoomId} onChange={(event) => setCreateDraft((current) => ({ ...current, secondTeachingRoomId: event.target.value }))}>
+                  <option value="">Same as first room</option>
+                  {teachingRooms.map((room) => <option value={room.id} key={room.id}>{room.name} ({room.capacity})</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Split</span>
+                <select value={createDraft.intensiveSplit} onChange={(event) => setCreateDraft((current) => ({ ...current, intensiveSplit: event.target.value }))}>
+                  <option value="90-90">90 / 90</option>
+                  <option value="60-120">60 / 120</option>
+                  <option value="120-60">120 / 60</option>
+                </select>
+              </label>
+            </>
+          ) : null}
           <div className="form-actions"><button disabled={busy} type="submit">{busy ? 'Creating...' : 'Create session'}</button></div>
         </form>
       </section> : null}
